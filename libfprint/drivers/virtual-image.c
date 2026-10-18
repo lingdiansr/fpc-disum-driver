@@ -206,6 +206,18 @@ on_listener_connected (FpiDeviceVirtualListener *listener,
 }
 
 static void
+dev_open_complete_timeout (FpDevice *device, gpointer user_data)
+{
+  fpi_image_device_open_complete (FP_IMAGE_DEVICE (device), user_data);
+}
+
+static void
+dev_close_complete_timeout (FpDevice *device, gpointer user_data)
+{
+  fpi_image_device_close_complete (FP_IMAGE_DEVICE (device), user_data);
+}
+
+static void
 dev_init (FpImageDevice *dev)
 {
   g_autoptr(GError) error = NULL;
@@ -233,7 +245,7 @@ dev_init (FpImageDevice *dev)
   self->cancellable = g_steal_pointer (&cancellable);
 
   /* Delay result to open up the possibility of testing race conditions. */
-  fpi_device_add_timeout (FP_DEVICE (dev), 100, (FpTimeoutFunc) fpi_image_device_open_complete, NULL, NULL);
+  fpi_device_add_timeout (FP_DEVICE (dev), 100, dev_open_complete_timeout, NULL, NULL);
 }
 
 static void
@@ -248,7 +260,7 @@ dev_deinit (FpImageDevice *dev)
   g_clear_object (&self->listener);
 
   /* Delay result to open up the possibility of testing race conditions. */
-  fpi_device_add_timeout (FP_DEVICE (dev), 100, (FpTimeoutFunc) fpi_image_device_close_complete, NULL, NULL);
+  fpi_device_add_timeout (FP_DEVICE (dev), 100, dev_close_complete_timeout, NULL, NULL);
 }
 
 static void

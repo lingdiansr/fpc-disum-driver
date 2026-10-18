@@ -40,8 +40,10 @@ typedef struct
 } FpiSsmTestData;
 
 static gboolean
-fpi_ssm_test_nullify_pointer (gpointer * nullify_location)
+fpi_ssm_test_nullify_pointer (gpointer user_data)
 {
+  gpointer *nullify_location = user_data;
+
   *nullify_location = NULL;
 
   return G_SOURCE_REMOVE;
@@ -78,8 +80,10 @@ fpi_ssm_test_data_unref (FpiSsmTestData *data)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (FpiSsmTestData, fpi_ssm_test_data_unref)
 
 static void
-fpi_ssm_test_data_unref_by_ssm (FpiSsmTestData *data)
+fpi_ssm_test_data_unref_by_ssm (gpointer user_data)
 {
+  FpiSsmTestData *data = user_data;
+
   data->ssm_destroyed = TRUE;
 
   fpi_ssm_test_data_unref (data);
@@ -137,7 +141,7 @@ ssm_test_new_full (int nr_states, int cleanup_state, const char *name)
   ssm = fpi_ssm_new_full (fake_device, test_ssm_handler, nr_states, cleanup_state, name);
   data = fpi_ssm_test_data_new ();
   data->expected_last_state = nr_states;
-  fpi_ssm_set_data (ssm, data, (GDestroyNotify) fpi_ssm_test_data_unref_by_ssm);
+  fpi_ssm_set_data (ssm, data, fpi_ssm_test_data_unref_by_ssm);
 
   return ssm;
 }
@@ -337,7 +341,7 @@ test_ssm_next_with_delayed (void)
   fpi_ssm_next_state (ssm);
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
 
@@ -445,7 +449,7 @@ test_ssm_jump_to_state_with_delayed (void)
   fpi_ssm_jump_to_state (ssm, FPI_TEST_SSM_STATE_2);
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
 
@@ -562,7 +566,7 @@ test_ssm_mark_completed_with_delayed (void)
   fpi_ssm_mark_completed (g_steal_pointer (&ssm));
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
 
@@ -626,7 +630,7 @@ test_ssm_mark_failed_with_delayed (void)
                        fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
 
@@ -683,7 +687,7 @@ test_ssm_delayed_next_cancel (void)
   g_assert_cmpuint (g_slist_length (data->handlers_chain), ==, 1);
 
   g_idle_add_full (G_PRIORITY_HIGH, test_ssm_cancel_delayed_action_delayed, ssm, NULL);
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
 
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
@@ -844,7 +848,7 @@ test_ssm_delayed_jump_to_state_cancel (void)
   g_assert_cmpuint (g_slist_length (data->handlers_chain), ==, 1);
 
   g_idle_add_full (G_PRIORITY_HIGH, test_ssm_cancel_delayed_action_delayed, ssm, NULL);
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
 
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
@@ -993,7 +997,7 @@ test_ssm_delayed_mark_completed_not_started (void)
   fpi_ssm_mark_completed_delayed (ssm, 10);
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &ssm);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &ssm);
 
   g_test_expect_message (G_LOG_DOMAIN, G_LOG_LEVEL_CRITICAL, "*BUG:*completed*");
   while (ssm != NULL)
@@ -1023,7 +1027,7 @@ test_ssm_delayed_mark_completed_cancel (void)
   g_assert_cmpuint (g_slist_length (data->handlers_chain), ==, 1);
 
   g_idle_add_full (G_PRIORITY_HIGH, test_ssm_cancel_delayed_action_delayed, ssm, NULL);
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
 
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
@@ -1216,7 +1220,7 @@ test_ssm_subssm_start_with_delayed (void)
   fpi_ssm_start_subsm (ssm, subssm);
   g_test_assert_expected_messages ();
 
-  g_timeout_add (100, G_SOURCE_FUNC (fpi_ssm_test_nullify_pointer), &timeout_tracker);
+  g_timeout_add (100, fpi_ssm_test_nullify_pointer, &timeout_tracker);
   while (timeout_tracker)
     g_main_context_iteration (NULL, TRUE);
 

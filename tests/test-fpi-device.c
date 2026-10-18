@@ -2669,6 +2669,15 @@ test_driver_identify_suspend_continues (void)
 }
 
 static void
+test_driver_identify_timeout (FpDevice *device, gpointer user_data)
+{
+  void (**identify) (FpDevice *) = user_data;
+
+  /* The synchronous suspend consumes this callback before the local expires. */
+  (*identify) (device);
+}
+
+static void
 test_driver_identify_suspend_succeeds (void)
 {
   g_autoptr(FpAutoResetClass) dev_class = auto_reset_device_class ();
@@ -2707,7 +2716,7 @@ test_driver_identify_suspend_succeeds (void)
   /* suspend_sync hangs until cancellation, so we need to trigger orig_identify
    * from the mainloop after calling suspend_sync.
    */
-  fpi_device_add_timeout (device, 0, (FpTimeoutFunc) orig_identify, NULL, NULL);
+  fpi_device_add_timeout (device, 0, test_driver_identify_timeout, &orig_identify, NULL);
 
   fake_dev->ret_suspend = fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED);
   fp_device_suspend_sync (device, NULL, &error);
@@ -2770,7 +2779,7 @@ test_driver_identify_suspend_busy_error (void)
   /* suspend_sync hangs until cancellation, so we need to trigger orig_identify
    * from the mainloop after calling suspend_sync.
    */
-  fpi_device_add_timeout (device, 0, (FpTimeoutFunc) orig_identify, NULL, NULL);
+  fpi_device_add_timeout (device, 0, test_driver_identify_timeout, &orig_identify, NULL);
 
   fake_dev->ret_suspend = fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED);
   fp_device_suspend_sync (device, NULL, &error);
