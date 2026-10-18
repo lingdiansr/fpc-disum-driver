@@ -246,6 +246,8 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 ### 首次真机运行记录（2026-10-18）
 
+> 可交付的排查文档（净室观测 + 三个待规格侧确认的问题）：[`M6_DEVICE_RESET_REPORT.md`](M6_DEVICE_RESET_REPORT.md)。
+
 方法：`tools/fpc_disum_hw_probe.c`（手动探针，从不注册为测试）链接 `_build/device` 的本仓库 libfprint；
 日志写入 `~/fpc-disum-runs/`（0700 目录、0600 文件），探针只打印非敏感摘要（设备标识、几何、像素摘要、错误文本）。
 设备为内置传感器，`/etc/udev/rules.d/70-fingerprint.rules` 已对本 VID:PID 打 `uaccess`，故无需 root；
