@@ -1,11 +1,12 @@
-# xiaomi-fpc-driver — FPC 传感器 (10a5:9201) Linux 驱动（净室实现侧）
+# fpc-disum-driver — FPC 传感器 (10a5:9201) Linux 驱动（净室实现侧）
 
 本仓库是**净室实现侧的 libfprint 派生源码树**：目标设备采用 **libfprint 内置图像驱动**路线，
 仅依据下面两份交付文件实现设备协议，不接触研究侧材料。
 
-项目/仓库标签是 `xiaomi-fpc-driver`；驱动、模块与注册 ID 沿用**设备族**名 `fpc_disum` —— 目标设备厂商标识是
-Fingerprint Cards AB（`10A5:9201`），上游 libfprint 也按传感器族命名驱动（`fpcmoc`、`egismoc`、`goodixmoc`…），
-按整机品牌命名会宣称本侧不具备的 OEM 覆盖范围（完整理由见 ROADMAP「命名」）。
+项目/仓库标签与驱动同名：`fpc-disum-driver` / 驱动 ID `fpc_disum`。目标设备厂商标识是
+Fingerprint Cards AB（`10A5:9201`），上游 libfprint 按传感器族命名驱动（`fpcmoc`、`egismoc`、`goodixmoc`…），
+本侧只覆盖这一颗传感器与固件 `0x0250`，因此标识符里只放设备名。被验证的那台机器是小米笔记本（设备为其内置传感器），
+这属于来源说明，不进入任何标识符（逐层命名对照见 ROADMAP「命名」）。
 
 ## 交付包（本仓库唯一允许的规格来源）
 
