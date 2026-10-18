@@ -13,7 +13,7 @@
 
 | 文件 | 固定 SHA-256 |
 |---|---|
-| [CLEANROOM_SPEC.md](docs/CLEANROOM_SPEC.md) | `f609db776be1fb340a7ee399d6bdc852a455ebc25d53ddfe941c9760cd0b341a` |
+| [CLEANROOM_SPEC.md](docs/CLEANROOM_SPEC.md) | `3968405fa2778b3d94a6dfed3ec7237d04c1e3bc029833aabc82b76447afa30e` |
 | [CLEANROOM_TEST_VECTORS.json](docs/CLEANROOM_TEST_VECTORS.json) | `ce04ce43665f2b2d27142f2c2ecd917b09219a87a82d4b3009c023baecfeda94` |
 
 上游代码只提供通用框架、API、算法和编码惯例；其中其他设备的驱动、公开录制样本和图像不是本传感器的协议依据。不得访问研究侧仓库、真实 PSK/图像、专有二进制、抓包或反编译产物来补实现。
@@ -221,6 +221,12 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 | 注册落点 | 根 `meson.build` 的 `drivers_info['fpc_disum'] = { 'helper': ['openssl'] }`；`libfprint/meson.build` 的 `driver_sources['fpc_disum']` 与 `libfpc_disum` 链接；生成的 `fpi-drivers.c` 调用 `fpi_device_fpc_disum_get_type` |
 | 设备匹配 | `id_table` 只有 `10a5:9201`；`usb_discover` 仅接受 `bcdDevice=0x0250` 并给相近版本 0 分（不推断兼容性） |
 
+> 门控说明（2026-10-18 复核）：Meson 内置的 `clang-format`／`clang-format-check` 目标是**全树**范围，而上游文件并不满足本仓库 `.clang-format`，
+> 因此它们**不是**本仓库的格式门（误用会重排大量上游文件）。本仓库的门是 **定向** `clang-format --dry-run --Werror` 跑驱动与新增测试；
+> `clang-tidy` 目标同样只对本仓库自身目标（驱动与新增测试）有意义。另：`libfprint:metainfo-validate`（`appstreamcli validate` 上游 metainfo）
+> 在全部构建目录下失败，报告 `description-first-para-too-short`（info）、`tag-empty provides`（warning）、`developer-info-missing`（info）；
+> 该文件与其生成输入都不在本次改动范围内，属既有的主机工具/上游数据问题，不计入本驱动验收。
+
 实现要点：`fpc_disum.c` 是 `FpImageDevice` 适配层——`img_open` 建立**新**会话并在 §6+§8 完成后报告；`activate` 就绪即完成，取图由 `change_state(AWAIT_FINGER_ON)` 启动；设备报触摸时上报"手指在场"，取到图像后上报图像与"手指离开"；`deactivate` 取消在途采集并在其完成回调里完成动作；`img_close` 先取消再走 §16.3 清理，随后释放 TLS 通道、PSK、传输，重复 close 由状态守卫拦住。取消路径明确：open 阶段由动作 cancellable 直接驱动（图像设备核心不会为 open 发 `deactivate`），采集阶段由核心的 `deactivate` 驱动。错误映射集中在 `fpc_disum_error.c`。
 
 **未验证与范围（诚实记录，不得读作已验证）**：
@@ -233,8 +239,8 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 **状态（2026-10-18）**：前置条件已满足（`cleanroom` 4/4 含 22 条向量重建；原生用例在 llvm／sanitizers／gcc 下全绿），
 授权范围按本节条目执行。**首次真机运行的结论是失败的**：驱动能匹配并枚举到设备，但 `open` 在 §6 换句柄处失败，
-后续传输报 EIO/ENODEV。已定位两个真实缺陷（一个已修、一个待重写），详见下方"首次真机运行记录"。
-**在重写后的驱动通过本节全部条目之前，不得把 `fpc_disum` 宣传为受支持。**
+后续传输报 EIO/ENODEV。共定位三个真实缺陷，均已处理（第三个按规格侧修订后的判据重写，见下方两节）。
+**在重跑本节全部条目并通过之前，不得把 `fpc_disum` 宣传为受支持。**
 
 - [x] 先完成 22 条向量、原生状态机测试和 ASan/UBSan 检查，再申请具体范围的硬件实验授权。
 - [ ] 经授权验证：无手指负例、单次采图、超时/取消、取消后再开与 close/reopen；只声明实际验证的能力。
@@ -270,7 +276,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
    已改为：**不触碰核心设备对象**，改为在我们自己的 `GUsbContext` 里重新 `enumerate` → `find_by_vid_pid` → `open` →
    只读配置（绝不 `SET_CONFIGURATION`）→ `claim interface 0`，并改用 GUsb 异步 API 直接做 I/O（`FpiUsbTransfer` 绑定在核心设备对象上，
    无法承载换句柄）。
-3. **未解决（阻断 M6，需规格侧确认）**：换句柄**之后**的第一个传输（`0x0b` GET_TLS_KEY）在约 1 s 后报 `transfer failed`
+3. **已按规格修订重写（2026-10-18，见下节）**：当时的表现是换句柄**之后**的第一个传输（`0x0b` GET_TLS_KEY）在约 1 s 后报 `transfer failed`
    （LIBUSB_ERROR_IO），紧接着的清理命令报 `No such device [-4]`，且设备**从 sysfs 消失**（`3-7` 短暂不在，随后带新 devnum 回来；
    devnum 5 → 12 → 13）。
    观测序列（两次独立运行，两种换句柄实现均相同）：
@@ -291,6 +297,27 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 附带改进（本次为定位而做，保留）：传输层现在记录每个操作与失败原因（ROADMAP 要求"保留底层 errno"）；
 探针的日志与卫生措施固定为 0700/0600。
+
+### 规格侧答复与重连判据实现（2026-10-18）
+
+规格侧已独立复现（**4/4** 次提交）并**修正契约**：`CMD_INIT` 之后设备确实复位并重新枚举（命令后 +1.0–1.2 s 掉线、
++0.5 s 以**新地址**回来、地址必定变化；实测 devnum 22→23→24→25），原 §6 括注"不是设备重枚举、地址不变"
+来自一次**采样过早**的观测（断连发生在命令后约 1.1 s，当时窗口未覆盖）。修订三处：§6 第 4 步子项、§10 行 6、附录 A。
+逐问答复：① 参考实现按"新枚举结果 + 探活 + 两次身份一致（含 address）+ 先释放旧句柄 + 重试 open/claim"处理，**不用固定延时**；
+② 契约已改；③ `CMD_INIT` 载荷**与复位无关**（全零继续可用）。答复全文：`M6_DEVICE_RESET_RESPONSE.md`。
+
+- 新基线（第 11 轮隔离复核：可实现、0 阻塞）：`docs/CLEANROOM_SPEC.md` = 76,166 B / `3968405f…`；向量文件未被改动（`ce04ce43…`）。
+  本仓库已把 `tools/check-cleanroom.py` 与本文档的固定哈希更新到该基线；`tools/check-cleanroom.py` 与 `sha256sum -c docs/SHA256SUMS` 均通过。
+- 传输层按判据重写（`fpc_disum_usb.c`，`FPC_DISUM_USB_REOPEN_*`）：① `CMD_INIT` 后**先释放旧句柄**（否则新句柄的 bulk 传输可能 EBUSY）；
+  ② 每 **0.2 s** 取一次**新的枚举结果**，要求连续两次身份（bus/address/port）一致且 address 非空（仍在稳定过程中的候选被拒）；
+  ③ 打开后用 `GET_DESCRIPTOR` **探活**；④ 只读当前配置（绝不发 `SET_CONFIGURATION`，§16.2）后重新 `claim interface 0`。
+  任何一步失败都重试到 **20 s** 上限；超时上报 USB/IO 失败（不静默继续、不退回旧句柄）。设备回来后一瞬间 `open`/`claim` 仍可能报 `-4`/`-5`，重试即覆盖。
+- 每一次 `CMD_INIT` 必然消耗一次掉线重枚举（devnum 递增），这是设备固有行为、不是缺陷；真机脚手架的账目按"一次 init = 一个 devnum"记。
+- 规格侧提醒（已遵守）：复位窗口内也**不得**重发标准配置请求（冗余 `SET_CONFIGURATION` 会触发 `-5` 并导致掉线）；
+  接收按 `len` 累积，不假设 512 B 包（内核对本设备报 `bulk endpoint 0x82 has invalid maxpacket 64`，与 §1 的"全速描述符 / 高速连接"一致）。
+- 改动后的离线复核：`cleanroom` 4/4、原生 14 项通过；`llvm`／`gcc`／`sanitizers` 三套构建通过；
+  定向 `clang-format --dry-run --Werror`（驱动与新增测试，17 个文件）干净；定向 `clang-tidy`（驱动文件，`clang-analyzer-*`/`bugprone-*` 为错误级）零诊断。
+- 真机重跑见下一节（本节全部条目需在重跑中逐条通过）。
 
 ## 开发规则
 

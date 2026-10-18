@@ -41,11 +41,20 @@
  * nothing to send, so the session can keep polling; this timeout bounds it. */
 #define FPC_DISUM_USB_BULK_TIMEOUT_MS 1000
 
-/* SPEC §6 step 4: the device is given up to 20 s to become visible again. */
+/* SPEC §6 step 4: the device gets up to 20 s to come back after CMD_INIT, and
+ * every look for it is a fresh enumeration, 0.2 s apart. */
 #define FPC_DISUM_USB_REOPEN_TIMEOUT_MS 20000
+#define FPC_DISUM_USB_REOPEN_RETRY_MS 200
 
-/* Backoff between reopen attempts; the retry loop stays cancellable. */
-#define FPC_DISUM_USB_REOPEN_RETRY_MS 50
+/* SPEC §6 step 4: the gap between the two identity reads that must agree. */
+#define FPC_DISUM_USB_SETTLE_GAP_MS 100
+
+/* SPEC §6 step 4: a control GET_DESCRIPTOR of the device descriptor probes a
+ * candidate handle for liveness. */
+#define FPC_DISUM_USB_PROBE_TIMEOUT_MS 1000
+#define FPC_DISUM_USB_REQ_GET_DESCRIPTOR 0x06
+#define FPC_DISUM_USB_DESC_DEVICE 0x0100
+#define FPC_DISUM_USB_PROBE_BYTES 18
 
 /* SPEC §4.1: the largest control IN request is the key request (1000 B). */
 #define FPC_DISUM_USB_CONTROL_IN_MAX 1000
@@ -406,31 +415,100 @@ op_reschedule (FpcDisumUsbOp *op)
 }
 
 /*
- * SPEC §6 step 4: after CMD_INIT the handle the core owns stops working.  The
- * device itself does not disappear from the bus for long, but the only way to
- * keep talking to it is a handle that is looked up and opened again -- hardware
- * evidence shows that reopening the core's own GUsbDevice object leaves an
- * unusable handle and knocks the device off the bus.  Our own context is used so
- * the core's object is never touched; SET_CONFIGURATION is never sent, because
- * the device has a single configuration that is already active (SPEC §16.2).
+ * SPEC §6 step 4 (revision of 2026-10-18): CMD_INIT makes the device reset and
+ * re-enumerate -- it leaves the bus about 1 s after the command and comes back
+ * with a *new* address, so the handle the core owns is dead from that moment on.
+ * A fresh handle has to be looked up in a context of our own: reopening the
+ * core's object leaves an unusable handle, and SET_CONFIGURATION is never sent,
+ * because the device has a single configuration that is already active
+ * (SPEC §16.2).
+ *
+ * The prescribed criterion for a candidate is applied here: the identity read
+ * twice from fresh enumerations must agree (bus/address/port, address non-zero),
+ * a control GET_DESCRIPTOR then probes liveness, and the interface is claimed
+ * again before the new handle replaces the old one.  open()/claim() can still
+ * fail for a moment after the device reappears, so every failure is retried
+ * until the deadline; on timeout the operation fails and the dead handle is
+ * never used again.
  */
+typedef struct
+{
+  guint8 bus;
+  guint8 address;
+  guint8 port;
+} FpcDisumUsbIdentity;
+
+static gboolean
+usb_identity_now (FpcDisumUsbPrivate *priv, FpcDisumUsbIdentity *identity, GUsbDevice **device)
+{
+  GUsbDevice *found;
+
+  g_usb_context_enumerate (priv->usb_context);
+  found = g_usb_context_find_by_vid_pid (priv->usb_context, priv->vid, priv->pid, NULL);
+  if (found == NULL)
+    return FALSE;
+
+  identity->bus = g_usb_device_get_bus (found);
+  identity->address = g_usb_device_get_address (found);
+  identity->port = g_usb_device_get_port_number (found);
+
+  if (identity->address == 0)
+    {
+      g_object_unref (found);
+      return FALSE;
+    }
+
+  *device = found;
+
+  return TRUE;
+}
+
+static gboolean
+usb_probe_liveness (GUsbDevice *usb)
+{
+  guint8 descriptor[FPC_DISUM_USB_PROBE_BYTES];
+  gsize actual = 0;
+  g_autoptr (GError) error = NULL;
+
+  if (g_usb_device_control_transfer (usb, G_USB_DEVICE_DIRECTION_DEVICE_TO_HOST,
+          G_USB_DEVICE_REQUEST_TYPE_STANDARD, G_USB_DEVICE_RECIPIENT_DEVICE,
+          FPC_DISUM_USB_REQ_GET_DESCRIPTOR, FPC_DISUM_USB_DESC_DEVICE, 0, descriptor,
+          sizeof descriptor, &actual, FPC_DISUM_USB_PROBE_TIMEOUT_MS, NULL, &error))
+    return TRUE;
+
+  fp_dbg ("liveness probe failed: %s", error != NULL ? error->message : "no error reported");
+
+  return FALSE;
+}
+
+/* SPEC §6 step 4: retry until the deadline; a timeout is a failure, never a
+ * silent fall-back to the old handle. */
+static void
+reopen_retry_or_fail (FpcDisumUsbOp *op)
+{
+  if (g_get_monotonic_time () >= op->deadline_us)
+    {
+      fp_dbg ("the device did not come back (deadline of %u ms reached)",
+          (guint)FPC_DISUM_USB_REOPEN_TIMEOUT_MS);
+      op_complete (op, FPC_DISUM_TRANSPORT_ERROR_IO, NULL, 0);
+      return;
+    }
+
+  op_reschedule (op);
+}
+
 static void
 reopen_poll (FpcDisumUsbOp *op)
 {
   FpcDisumUsbPrivate *priv = op->priv;
   g_autoptr (GError) error = NULL;
-  GUsbDevice *found;
+  FpcDisumUsbIdentity first, second;
+  GUsbDevice *found = NULL;
   gint current;
 
   if (op->cancelled)
     {
       op_complete (op, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, NULL, 0);
-      return;
-    }
-
-  if (priv->usb_own != NULL)
-    {
-      op_complete (op, FPC_DISUM_TRANSPORT_OK, NULL, 0);
       return;
     }
 
@@ -446,20 +524,29 @@ reopen_poll (FpcDisumUsbOp *op)
         }
     }
 
-  g_usb_context_enumerate (priv->usb_context);
-  found = g_usb_context_find_by_vid_pid (priv->usb_context, priv->vid, priv->pid, NULL);
-
-  if (found == NULL)
+  /* Identity from one enumeration, a fresh one 100 ms later, then compare. */
+  if (!usb_identity_now (priv, &first, &found))
     {
-      /* Not visible again yet: retry until the deadline (SPEC §6 step 4). */
-      if (g_get_monotonic_time () >= op->deadline_us)
-        {
-          fp_dbg ("the device did not become visible again after CMD_INIT");
-          op_complete (op, FPC_DISUM_TRANSPORT_ERROR_IO, NULL, 0);
-          return;
-        }
+      fp_dbg ("the device is not on the bus yet");
+      reopen_retry_or_fail (op);
+      return;
+    }
 
-      op_reschedule (op);
+  g_clear_object (&found);
+  g_usleep ((gulong)FPC_DISUM_USB_SETTLE_GAP_MS * 1000);
+
+  if (!usb_identity_now (priv, &second, &found))
+    {
+      fp_dbg ("the device left the bus again while its identity was checked");
+      reopen_retry_or_fail (op);
+      return;
+    }
+
+  if (first.bus != second.bus || first.address != second.address || first.port != second.port)
+    {
+      fp_dbg ("the device is still settling (address %u -> %u)", first.address, second.address);
+      g_clear_object (&found);
+      reopen_retry_or_fail (op);
       return;
     }
 
@@ -467,10 +554,16 @@ reopen_poll (FpcDisumUsbOp *op)
     {
       fp_dbg ("opening the device again failed: %s",
           error != NULL ? error->message : "no error reported");
-      if (g_get_monotonic_time () >= op->deadline_us)
-        op_complete (op, FPC_DISUM_TRANSPORT_ERROR_IO, NULL, 0);
-      else
-        op_reschedule (op);
+      g_clear_object (&found);
+      reopen_retry_or_fail (op);
+      return;
+    }
+
+  if (!usb_probe_liveness (found))
+    {
+      g_usb_device_close (found, NULL);
+      g_clear_object (&found);
+      reopen_retry_or_fail (op);
       return;
     }
 
@@ -480,22 +573,26 @@ reopen_poll (FpcDisumUsbOp *op)
       fp_dbg ("reading the current configuration failed: %s",
           error != NULL ? error->message : "no error reported");
       g_usb_device_close (found, NULL);
-      op_complete (op, FPC_DISUM_TRANSPORT_ERROR_IO, NULL, 0);
+      g_clear_object (&found);
+      reopen_retry_or_fail (op);
       return;
     }
 
   if (!g_usb_device_claim_interface (found, FPC_DISUM_USB_INTERFACE, 0, &error))
     {
-      fp_dbg ("claiming interface %d failed: %s", FPC_DISUM_USB_INTERFACE,
+      fp_dbg ("claiming interface %d on the new handle failed: %s", FPC_DISUM_USB_INTERFACE,
           error != NULL ? error->message : "no error reported");
       g_usb_device_close (found, NULL);
-      op_complete (op, FPC_DISUM_TRANSPORT_ERROR_IO, NULL, 0);
+      g_clear_object (&found);
+      reopen_retry_or_fail (op);
       return;
     }
 
-  fp_dbg ("reopened: new handle, configuration %d, interface %d claimed", current,
-      FPC_DISUM_USB_INTERFACE);
+  fp_dbg ("reconnected after CMD_INIT: bus %u address %u port %u, configuration %d, "
+          "interface %d claimed",
+      second.bus, second.address, second.port, current, FPC_DISUM_USB_INTERFACE);
 
+  g_clear_object (&priv->usb_own);
   priv->usb_own = found;
   priv->usb = found;
 
@@ -506,10 +603,13 @@ static void
 fpc_disum_usb_reopen (
     FpcDisumTransport *transport, FpcDisumTransportDoneFunc done, gpointer user_data)
 {
+  FpcDisumUsbPrivate *priv;
   FpcDisumUsbOp *op;
 
   g_return_if_fail (transport != NULL);
   g_return_if_fail (done != NULL);
+
+  priv = transport_priv (transport);
 
   op = op_new (transport, FPC_DISUM_USB_OP_REOPEN);
   op->done = done;
@@ -520,9 +620,23 @@ fpc_disum_usb_reopen (
 
   op->deadline_us = g_get_monotonic_time () + (gint64)FPC_DISUM_USB_REOPEN_TIMEOUT_MS * 1000;
 
-  /* SPEC §6 step 4: the old handle is dead, so reopen_poll() looks the device up
-   * again and switches priv->usb to that handle.  The core's object is left
-   * untouched; it closes it when the device is closed. */
+  /* SPEC §6 step 4: CMD_INIT resets the device, so it re-enumerates with a new
+   * address and the handle the core owns is dead.  That handle is released here
+   * first -- the kernel keeps the interface claimed for it, and a transfer on the
+   * new handle would fail with EBUSY while the old one is still open.  (If the
+   * core closes it again later, that close simply reports "not open".)
+   * reopen_poll() then looks the device up again in our own context. */
+  if (priv->usb != NULL)
+    {
+      g_autoptr (GError) error = NULL;
+
+      if (g_usb_device_close (priv->usb, &error))
+        fp_dbg ("released the dead handle before waiting for the re-enumeration");
+      else
+        fp_dbg ("releasing the dead handle reported: %s",
+            error != NULL ? error->message : "no error reported");
+    }
+
   reopen_poll (op);
 }
 
