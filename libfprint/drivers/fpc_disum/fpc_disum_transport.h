@@ -46,7 +46,9 @@ struct _FpcDisumTransport
 {
   /*
    * Vendor control OUT (bmRequestType 0x40, wIndex 0) carrying an optional data
-   * stage of up to 4 B (SPEC §3.1, §4.1).
+   * stage: 4 B for CMD_INIT/ARM and up to 64 B for CMD_TLS_DATA, whose wLength is
+   * variable (6-64 B; host->device TLS records are fragmented at 64 B) -- SPEC
+   * §4.1/§8.  The session enforces the per-command length.
    */
   void (*control_out) (FpcDisumTransport *transport, guint8 request, guint16 value,
       const guint8 *data, gsize len, FpcDisumTransportDoneFunc done, gpointer user_data);

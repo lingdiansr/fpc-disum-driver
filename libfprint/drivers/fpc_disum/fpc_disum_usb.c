@@ -25,6 +25,7 @@
 
 #include "fpi-device.h"
 #include "fpi-log.h"
+#include "fpc_disum_tls.h"
 
 /* SPEC §1/§3.2: the only data endpoint is 0x82 IN BULK, maxPacketSize 64. */
 #define FPC_DISUM_USB_BULK_IN_EP 0x82
@@ -59,8 +60,10 @@
 /* SPEC §4.1: the largest control IN request is the key request (1000 B). */
 #define FPC_DISUM_USB_CONTROL_IN_MAX 1000
 
-/* SPEC §3.1: the control OUT data stage is at most 4 B. */
-#define FPC_DISUM_USB_CONTROL_OUT_MAX 4
+/* SPEC §4.1/§8: the widest control OUT data stage is a TLS fragment, so this
+ * bound follows FPC_DISUM_TLS_DATA_MAX (4 B commands are the session's business).
+ * Getting this wrong is not cosmetic: the first handshake write is rejected. */
+#define FPC_DISUM_USB_CONTROL_OUT_MAX FPC_DISUM_TLS_DATA_MAX
 
 typedef struct _FpcDisumUsbOp FpcDisumUsbOp;
 
