@@ -31,6 +31,28 @@
 /* SPEC §4.5 操作前提: a press is wanted only while a capture waits for the
  * finger; capture_once() sets it and the cue handler below reads it. */
 static gboolean press_wanted;
+static guint progress_id;
+static guint wait_started;
+
+/* SPEC §4.5 asks the test scaffolding to include the operator's feedback, not
+ * only the cue: a one-second line shows how long the window has been open, so
+ * the operator can see that the hold is still needed (and the finger-status
+ * handler prints the moment the device reports the finger). */
+static gboolean
+progress_tick (gpointer user_data)
+{
+  if (!press_wanted)
+    {
+      progress_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  g_print ("[waiting %u s of 30 -- keep the finger pressed]\n",
+      (guint)(g_get_monotonic_time () / G_USEC_PER_SEC) - wait_started);
+  fflush (stdout);
+
+  return G_SOURCE_CONTINUE;
+}
 
 static gboolean
 cancel_cb (gpointer user_data)
@@ -177,6 +199,9 @@ capture_once (FpDevice *device, guint cancel_after_ms)
       /* SPEC §4.5 操作前提: a press is wanted, and the cue is emitted the moment
        * the device is armed (see on_finger_status_changed). */
       press_wanted = TRUE;
+      wait_started = (guint)(g_get_monotonic_time () / G_USEC_PER_SEC);
+      if (progress_id == 0)
+        progress_id = g_timeout_add_seconds (1, progress_tick, NULL);
       printf ("capture: waiting for the finger (driver window 30000 ms)\n"
               "         press as soon as the cue appears, then hold it for >= 10 s\n");
     }
@@ -196,6 +221,12 @@ capture_once (FpDevice *device, guint cancel_after_ms)
     }
 
   press_wanted = FALSE;
+
+  if (progress_id != 0)
+    {
+      g_source_remove (progress_id);
+      progress_id = 0;
+    }
 }
 
 /* SPEC §4.5 操作前提: the host must give a perceptible cue at the moment ARM goes
@@ -224,8 +255,16 @@ on_finger_status_changed (GObject *object, GParamSpec *pspec)
 {
   FpDevice *device = FP_DEVICE (object);
 
-  if (press_wanted && (fp_device_get_finger_status (device) & FP_FINGER_STATUS_NEEDED) != 0)
+  if (!press_wanted)
+    return;
+
+  if ((fp_device_get_finger_status (device) & FP_FINGER_STATUS_NEEDED) != 0)
     cue_operator ();
+  else if ((fp_device_get_finger_status (device) & FP_FINGER_STATUS_PRESENT) != 0)
+    {
+      g_print ("\n[finger seen by the device -- keep holding]\n");
+      fflush (stdout);
+    }
 }
 
 int
