@@ -1,3 +1,8 @@
 *.o
 *.swp
 _build
+.cache/
+.venv/
+__pycache__/
+*.py[cod]
+/artifacts/
