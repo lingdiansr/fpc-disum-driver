@@ -50,7 +50,7 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M5 已完成；M6 首次真机验收未通过**：驱动已实现并注册 `fpc_disum` / `10a5:9201`，真机上能被匹配和枚举，但 `open` 在 §6 换句柄处失败（两个缺陷：已修一个、待重写一个，见 ROADMAP M6「首次真机运行记录」）。**在修复并通过 M6 全部条目之前，不得宣称设备可用。**
+- **当前状态：M0–M5 已完成；M6 首次真机验收未通过**：驱动已实现并注册 `fpc_disum` / `10a5:9201`，真机上能被匹配和枚举，但 `open` 在 §6 换句柄之后失败：设备在 `CMD_INIT` 后离开总线重枚举（与 §6 括注冲突，已记录并交回规格侧；另有一个已修的冗余 `SET_CONFIGURATION` 缺陷）。见 ROADMAP M6「首次真机运行记录」。**在修复并通过 M6 全部条目之前，不得宣称设备可用。**
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。

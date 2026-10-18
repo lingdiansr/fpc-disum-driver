@@ -264,12 +264,28 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 1. **已修**：换句柄时把 `g_usb_device_get_configuration()`（=1）与 `g_usb_device_get_configuration_index()`（=4）当成同一量比较，
    于是发出 `set_configuration(4)` —— 正是 §16.2 **禁止的冗余标准配置请求**。真机症状：`Entity not found [-5]`，随后设备
    掉线重枚举（devnum 变化）。现已删除该分支：只**读**当前配置并记录，绝不发送 `SET_CONFIGURATION`（§1 该设备只有一个配置，内核已选好）。
-2. **待修（阻断 M6）**：换句柄实现为"关闭核心的 GUsbDevice 句柄 + 在同一对象上 `g_usb_device_open()` + claim"。
-   真机症状：claim 报告成功，但紧接着的 `0x0b`(GET_TLS_KEY) 报 `transfer failed`（LIBUSB_ERROR_IO），清理命令报
-   `No such device [-4]`，且设备**从 sysfs 消失**（`3-7` 短暂不在，随后带着新 devnum 回来）。
-   结论：同一对象上 close+open 拿不到可用句柄，反而把设备打掉；§6 要求的"重新 libusb_open 并重建句柄"必须用**新发现的句柄**，
-   并且 I/O 不能继续用绑定在核心设备对象上的 `FpiUsbTransfer`。所需重写记在 `fpc_disum_usb.c` 的 `fpc_disum_usb_reopen()` 上方注释里。
-   旁证：规格 §16.4 把"消失→新地址"记为**主机侧坏动作**的结果，本次两次都属该情形（先是被禁的 configure，后是同对象重开）。
+2. **已重写（但真机症状未变）**：原实现"关闭核心句柄 + 在同一 `GUsbDevice` 对象上 `g_usb_device_open()`"。
+   已改为：**不触碰核心设备对象**，改为在我们自己的 `GUsbContext` 里重新 `enumerate` → `find_by_vid_pid` → `open` →
+   只读配置（绝不 `SET_CONFIGURATION`）→ `claim interface 0`，并改用 GUsb 异步 API 直接做 I/O（`FpiUsbTransfer` 绑定在核心设备对象上，
+   无法承载换句柄）。
+3. **未解决（阻断 M6，需规格侧确认）**：换句柄**之后**的第一个传输（`0x0b` GET_TLS_KEY）在约 1 s 后报 `transfer failed`
+   （LIBUSB_ERROR_IO），紧接着的清理命令报 `No such device [-4]`，且设备**从 sysfs 消失**（`3-7` 短暂不在，随后带新 devnum 回来；
+   devnum 5 → 12 → 13）。
+   观测序列（两次独立运行，两种换句柄实现均相同）：
+
+   | 步骤 | 结果 |
+   |---|---|
+   | `0x08` → `0x50`(GET_STATE) → `0x01`(CMD_INIT) | ✅ 每次均成功 |
+   | 换句柄（新句柄已 open + claim 成功，配置读为 1） | ✅ 报告成功 |
+   | `0x0b`(GET_TLS_KEY) | ❌ 约 1 s 后 IO 错误 |
+   | `0x03`/`0x12`（清理） | ❌ ENODEV，且设备已不在总线上 |
+
+   结论：**设备在 `CMD_INIT` 之后确实离开了总线并重新枚举**，与 §6 第 4 步的括注"不是设备重枚举（内核无 usb 设备事件、**地址不变**）"**冲突**。
+   本侧按规则停止并交回规格侧，不猜测设备行为；需要研究侧给出的信息是：
+   （a）参考实现在 `CMD_INIT` 之后如何处理这段"设备不可见"窗口（等待条件、轮询间隔、是否有额外握手/命令）；
+   （b）`CMD_INIT` 的 4 B 载荷是否真的可任意（本侧用规格默认全零）——若设备侧据此决定是否复位，这一点需要写进契约；
+   （c）核对参考运行的**地址是否也在变化**（若变化，§6 的括注需要按观测修正）。
+   在得到（a）之前，M6 的 §8/§4.5 条目无法开始（初始化自身受阻），驱动不得声明受支持。
 
 附带改进（本次为定位而做，保留）：传输层现在记录每个操作与失败原因（ROADMAP 要求"保留底层 errno"）；
 探针的日志与卫生措施固定为 0700/0600。
