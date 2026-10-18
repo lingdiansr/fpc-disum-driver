@@ -363,6 +363,20 @@ test('fpc-disum-tls',
     env: envs,
 )
 
+fpc_disum_channel_test = executable('test-fpc-disum-channel',
+    sources: ['test-fpc-disum-channel.c', fpc_disum_corpus],
+    dependencies: fpc_disum_dep,
+    include_directories: include_directories('.'),
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-channel',
+    fpc_disum_channel_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
 test_utils = static_library('fprint-test-utils',
     sources: [
         'test-utils.c',
