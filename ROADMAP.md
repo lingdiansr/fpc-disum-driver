@@ -155,15 +155,32 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 实现要点：通道是被动的——不阻塞、不自己计时；调用方决定无进展超时，直接释放通道即为取消。握手完全由 `SSL_do_handshake` 状态驱动，不硬编码飞行次数；`feed()/take_output()` 不感知 USB 包或外层帧边界，记录可任意切分，输出按调用方给的 64 B 上限分片。PSK 必须为 32 B；失败后拒绝输入并保留可读诊断（`error_text`，不含密钥）；释放时擦除 PSK 拷贝。PSK 身份不符单独报告为 `ERROR_IDENTITY`，其余 TLS 层失败（alert、Finished/MAC、其他协议错误）归为 `ERROR_HANDSHAKE`，BIO 故障为 `ERROR_IO`。
 
-## M4：USB 与单次采集状态机
+## M4：USB 与单次采集状态机（已完成）
 
-- [ ] 在 GUsb/FpiUsbTransfer 的生命周期内实现 §6；`CMD_INIT` 后关闭/重开句柄、重新 claim 和重建 reader，再执行 GET_TLS_KEY/TLS_INIT。
-- [ ] 目标配置已生效时不再发送 SET_CONFIGURATION；不得以端口 reset 或固定延时“修好”初始化。
-- [ ] `EVT_INIT_RESULT` 只作通知，不作为额外门控；等到 `EVT_FINGER_DWN` 后才发 GET_IMG。
-- [ ] 不依赖一次采集恰好 11/12 个 TLS 帧，按解密流和消息边界完成图像。
-- [ ] 未知事件失败、已知无关事件忽略；未知第三字段不猜语义，`EVT_ARM_RESULT(value=0x64)` 按约定失败。
+- [x] 在 GUsb/FpiUsbTransfer 的生命周期内实现 §6；`CMD_INIT` 后关闭/重开句柄、重新 claim 和重建 reader，再执行 GET_TLS_KEY/TLS_INIT。
+- [x] 目标配置已生效时不再发送 SET_CONFIGURATION；不得以端口 reset 或固定延时“修好”初始化。
+- [x] `EVT_INIT_RESULT` 只作通知，不作为额外门控；等到 `EVT_FINGER_DWN` 后才发 GET_IMG。
+- [x] 不依赖一次采集恰好 11/12 个 TLS 帧，按解密流和消息边界完成图像。
+- [x] 未知事件失败、已知无关事件忽略；未知第三字段不猜语义，`EVT_ARM_RESULT(value=0x64)` 按约定失败。
 
 **完成判据**：合成传输事件驱动真实会话状态机，验证命令编码、顺序、握手门控、缺触摸不发 GET_IMG 和错误阶段。真机验证单独授权，不用它替代可确定性的离线验收。
+
+**本轮实际验收**：
+
+| 项 | 结果 |
+|---|---|
+| `test-fpc-disum-session` | 18 个用例：§6 命令顺序（含 `CMD_INIT` 4B 全零载荷与换句柄）、`EVT_INIT_RESULT` 不门控、握手无进展超时、envelope 被拒、换句柄失败、PSK 不符、采集命令顺序与像素逐字节比对、缺触摸不发 `GET_IMG`、无关事件记录并忽略、未知事件失败且第三字段原样保留、`0x64` 失败、分段无关性（单帧／TLS 字节级分帧／帧跨 bulk 包切分）、无图超时、USB 失败即时分类、非图像应用消息拒绝、等待触摸与初始化两个取消点、清理首因保留、清理失败上报 |
+| 三套构建 | LLVM、严格 ASan+UBSan、GCC 下 `cleanroom` 4/4 与原生 8/8 全部通过 |
+| 泄漏检查 | 同工具链的故意泄漏可被报出（LeakSanitizer 生效），会话用例零报告 |
+| 变异 | 去掉 `CMD_INIT` 后换句柄、跳过等待触摸直接 `GET_IMG`、等待触摸时不设窗口：三者均使对应用例失败 |
+| 静态分析 | 定向 clang-tidy 覆盖会话、传输与新测试无启用规则诊断；clang-format 干净 |
+
+实现要点：传输边界 `fpc_disum_transport.h` 规定“一次操作恰好一个回调、每次至多一个操作在途”，会话与设备之间没有线程、没有阻塞等待；`fpc_disum_usb.c` 是它在 GUsb/FpiUsbTransfer 上的实现（控制 OUT/IN、0x82 bulk 读、`CMD_INIT` 后关句柄→重开→读当前配置→必要时才 `SET_CONFIGURATION`→claim interface 0，重试有界且可取消）；`fpc_disum_session.c` 是 §6/§8/§4.5/§16 的状态机（显式状态 + 单步循环，同步完成回调不会堆栈递归）。超时：握手 5 s（每次进展重置）、换句柄 20 s、等待触摸与等待图像各 30 s，均可配置。清理固定为 `ARM_STOP`（仅当已 ARM）→ `ABORT` → `SESSION_OFF`，每条都尝试执行，失败不回退首个根因；取消走独立状态，不伪装成“无手指”。
+
+**范围决定（研究侧知悉项）**：
+- 不发送 `GET_KPI`(0x0C) 与 `GET_DEAD_PIXELS`(0x0A)：§10 行 9 已把“非采集必需”定案（43 个 run 从未发送、其中 8 轮仍成功），其返回格式也未观测，不属于可实现契约。
+- 会话使用自己的显式状态机而非 `FpiSsm`：`fpi_ssm_new()` 需要 `FpDevice`、`FpiUsbTransfer` 需要**活的** `GUsbDevice`，两者都会把离线验收绑死在设备上；本轮判据要求“合成事件驱动真实状态机”，因此把设备相关内容收到传输边界之后（`fpc_disum_usb.c` 仍严格采用上游 GUsb/FpiUsbTransfer 惯例）。M5 的设备胶接层继续沿用上游 `FpImageDevice` 入口。
+- 事件记录只保留**未被消费**的帧（§16.1“记录并忽略”的诊断对象），避免上万条 `EVT_TLS` 数据帧灌满有界日志并挤掉真正需要诊断的事件。
 
 ## M5：内置图像驱动与取消/关闭
 
