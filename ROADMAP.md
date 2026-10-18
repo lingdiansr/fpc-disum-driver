@@ -319,6 +319,34 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
   定向 `clang-format --dry-run --Werror`（驱动与新增测试，17 个文件）干净；定向 `clang-tidy`（驱动文件，`clang-analyzer-*`/`bugprone-*` 为错误级）零诊断。
 - 真机重跑见下一节（本节全部条目需在重跑中逐条通过）。
 
+### 真机复跑（2026-10-18 第二轮）：判据生效 + 两个新问题
+
+起点是提交 `e528b6a`（按 §6 判据重写换句柄）。离线复核：`cleanroom` 4/4、原生 14 项通过；`llvm`／`gcc`／`sanitizers` 三套构建通过；
+定向 `clang-format --dry-run --Werror`（17 个文件）干净；定向 `clang-tidy`（驱动文件）零诊断。
+
+| 观测 | 结果 |
+|---|---|
+| §6 重连判据 | **通过**：`CMD_INIT` → 先释放旧句柄 → +1.08 s 设备离总线（探活失败）→ +0.71 s 后 `reconnected after CMD_INIT: bus 3 address 28 port 7`（地址 26→27→28，每次递增）→ 重新 claim |
+| `0x0b`(GET_TLS_KEY) | **通过**：在新句柄上立即成功（首轮是"约 1 s 后 IO 失败"） |
+| §6/§8 其余 | **通过**：`0x05`(TLS_INIT) → `0x06`(TLS_DATA) 分片握手 → `Image device open completed` |
+| 无手指负例 | **通过**：`activate` → `0x02`(ARM) → 驱动自身 30 s 触摸窗口到期（`no touch event arrived within the window`）→ 清理 `ARM_STOP`→`ABORT`→`SESSION_OFF` 全部发出 → `close completed` |
+
+**缺陷 4（本次发现并修复）：控制 OUT 上界写错。** 传输层把控制 OUT 数据阶段的上界定为 **4 B**（对 §3.1 的过度概括），
+而 §4.1 明确 `CMD_TLS_DATA`(0x06) 的 `wLength` 是**变长 6-64 B**，§8 要求宿主→设备的 TLS 记录按 **≤64 B** 分片。
+症状：`fpc_disum_usb_control_out: assertion 'len <= FPC_DISUM_USB_CONTROL_OUT_MAX' failed` ⇒ 握手首个分片被丢 ⇒
+`the handshake made no progress`。修复：上界改为跟随 `FPC_DISUM_TLS_DATA_MAX`（同一常量，不会再漂移），并更正
+`fpc_disum_transport.h` 的契约注释。**该边界离线不可覆盖**（假传输没有这个上界），只有真机能暴露 —— 这也是首轮没走到握手的原因被掩盖的方式。
+
+**缺陷 5（未解决；非驱动缺陷，需交付形态决策）：设备自复位与核心"设备已移除"模型冲突。**
+`CMD_INIT` 让设备离总线后，`FpContext` 的 GUsbContext `device-removed` 信号经 `usb_device_removed_cb`（`fp-context.c:263`）
+把该 `FpDevice` 永久标记为已移除；随后 `fp_device_task_return_in_idle_cb`（`fpi-device.c:1076`，核心注释自述"除成功 open 这一 odd corner case"）
+会把**所有非 open 动作的结果强制改写成 `FP_DEVICE_ERROR_REMOVED`**。本次运行日志证据：open 成功、ARM 成功、驱动按契约报"窗口到期"，
+但上层拿到的**采集**与 **close** 结果都是 `REMOVED`（`capture: error domain=fp-device-error-quark code=256 message="This device has been removed from the system."`）。
+⇒ 现状下**任何真实采集都无法交付给上层**（成功采集同样会被改写成 REMOVED）；而 §16.2 要求"下一次 `open` 必须新建 session 并重新初始化+TLS"，
+即**每次 open 必然复位设备**。这不是设备行为未知，也不是规格缺口：研究侧 Linux 参考工具是独立 libusb 程序，不经过 libfprint 的移除模型，所以从未遇到。
+两条路线，需交付方选择：**(A)** fork 内做一处最小、显式的核心扩展（驱动声明"预期重枚举"，移除回调据此不标记；约 30 行 + 记录上游偏离）；
+**(B)** 按 README 允许的第二形态改为独立守护进程（复用会话/TLS/解析层，绕开框架移除模型）。
+
 ## 开发规则
 
 1. 每个里程碑先写能捕获真实边界/状态错误的测试，再实现；构造人工输入不等于被测 C 实现已通过。
