@@ -9,10 +9,14 @@
 
 #include "fpc_disum_tls.h"
 
+#include <string.h>
+
 #include <openssl/core_names.h>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/params.h>
+#include <openssl/ssl.h>
 
 /*
  * NUL-terminated ASCII constants fixed by the reviewed specification (§8).  The
@@ -190,4 +194,319 @@ out:
     fpc_disum_psk_clear (psk);
 
   return status;
+}
+
+/*
+ * TLS-PSK channel (SPEC §8).  The host is the TLS server; only TLS 1.2 with
+ * PSK-AES128-CBC-SHA256 is accepted and the identity is the reviewed one.
+ */
+struct _FpcDisumTls
+{
+  SSL_CTX *ctx;
+  SSL *ssl;
+  /* Non-NULL only while the BIO has not yet been handed to the SSL object. */
+  BIO *rbio;
+  BIO *wbio;
+  guint8 psk[FPC_DISUM_PSK_LEN];
+  gboolean identity_checked;
+  gboolean identity_ok;
+  gboolean established;
+  gboolean failed;
+  FpcDisumTlsStatus status;
+  gchar *error_text;
+};
+
+static const gchar psk_identity[] = "Disum PSK";
+static const gchar session_context[] = "fpc-disum";
+
+static void
+record_error (FpcDisumTls *self)
+{
+  unsigned long code = ERR_peek_last_error ();
+  gchar text[256];
+
+  if (code == 0)
+    return;
+
+  ERR_error_string_n (code, text, sizeof (text));
+  g_clear_pointer (&self->error_text, g_free);
+  self->error_text = g_strdup (text);
+}
+
+static unsigned int
+psk_server_callback (SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len)
+{
+  FpcDisumTls *self = SSL_get_app_data (ssl);
+
+  self->identity_checked = TRUE;
+  self->identity_ok = identity != NULL && g_strcmp0 (identity, psk_identity) == 0;
+
+  if (!self->identity_ok || max_psk_len < FPC_DISUM_PSK_LEN)
+    return 0;
+
+  memcpy (psk, self->psk, FPC_DISUM_PSK_LEN);
+  return FPC_DISUM_PSK_LEN;
+}
+
+FpcDisumTls *
+fpc_disum_tls_new (const FpcDisumPsk *psk)
+{
+  FpcDisumTls *self;
+  SSL_CTX *ctx;
+
+  g_return_val_if_fail (psk != NULL, NULL);
+
+  if (psk->psk_len != FPC_DISUM_PSK_LEN)
+    return NULL;
+
+  ctx = SSL_CTX_new (TLS_server_method ());
+  if (ctx == NULL)
+    return NULL;
+
+  if (SSL_CTX_set_min_proto_version (ctx, TLS1_2_VERSION) != 1
+      || SSL_CTX_set_max_proto_version (ctx, TLS1_2_VERSION) != 1
+      || SSL_CTX_set_cipher_list (ctx, "PSK-AES128-CBC-SHA256") != 1
+      || SSL_CTX_set_session_id_context (
+             ctx, (const unsigned char *)session_context, sizeof (session_context) - 1)
+             != 1)
+    {
+      SSL_CTX_free (ctx);
+      return NULL;
+    }
+
+  /*
+   * Pin the server-side session behaviour: the device only answers a ServerHello
+   * that carries a non-empty session id (SPEC §8).  The handshake test asserts the
+   * id the synthetic client observes.
+   */
+  SSL_CTX_set_session_cache_mode (ctx, SSL_SESS_CACHE_SERVER);
+  SSL_CTX_set_psk_server_callback (ctx, psk_server_callback);
+
+  self = g_new0 (FpcDisumTls, 1);
+  memcpy (self->psk, psk->psk, FPC_DISUM_PSK_LEN);
+  self->status = FPC_DISUM_TLS_WANT_READ;
+  self->ctx = ctx;
+  self->ssl = SSL_new (ctx);
+  self->rbio = BIO_new (BIO_s_mem ());
+  self->wbio = BIO_new (BIO_s_mem ());
+
+  if (self->ssl == NULL || self->rbio == NULL || self->wbio == NULL)
+    {
+      fpc_disum_tls_free (self);
+      return NULL;
+    }
+
+  BIO_set_mem_eof_return (self->rbio, -1);
+  SSL_set_accept_state (self->ssl);
+  SSL_set_app_data (self->ssl, self);
+  /* The SSL object owns both BIOs from here on; I/O goes through SSL_get_*bio(). */
+  SSL_set_bio (self->ssl, self->rbio, self->wbio);
+  self->rbio = NULL;
+  self->wbio = NULL;
+
+  return self;
+}
+
+void
+fpc_disum_tls_free (FpcDisumTls *self)
+{
+  if (self == NULL)
+    return;
+
+  SSL_free (self->ssl);
+  BIO_free (self->rbio);
+  BIO_free (self->wbio);
+  SSL_CTX_free (self->ctx);
+
+  OPENSSL_cleanse (self->psk, sizeof (self->psk));
+  g_clear_pointer (&self->error_text, g_free);
+  g_free (self);
+}
+
+gboolean
+fpc_disum_tls_feed (FpcDisumTls *self, const guint8 *data, gsize len)
+{
+  BIO *rbio;
+
+  g_return_val_if_fail (self != NULL, FALSE);
+
+  if (self->failed)
+    return FALSE;
+
+  if (len == 0)
+    return TRUE;
+
+  if (len > G_MAXINT)
+    return FALSE;
+
+  rbio = SSL_get_rbio (self->ssl);
+  if (rbio == NULL || BIO_write (rbio, data, (int)len) != (int)len)
+    {
+      self->failed = TRUE;
+      self->status = FPC_DISUM_TLS_ERROR_IO;
+      record_error (self);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+FpcDisumTlsStatus
+fpc_disum_tls_step (FpcDisumTls *self)
+{
+  int ret;
+  int error;
+
+  g_return_val_if_fail (self != NULL, FPC_DISUM_TLS_ERROR_IO);
+
+  if (self->failed || self->established)
+    return self->status;
+
+  ERR_clear_error ();
+  ret = SSL_do_handshake (self->ssl);
+
+  if (ret == 1)
+    {
+      self->established = TRUE;
+      self->status = FPC_DISUM_TLS_OK;
+      return self->status;
+    }
+
+  error = SSL_get_error (self->ssl, ret);
+  if (error == SSL_ERROR_WANT_READ)
+    {
+      self->status = FPC_DISUM_TLS_WANT_READ;
+      return self->status;
+    }
+
+  if (error == SSL_ERROR_WANT_WRITE)
+    {
+      /* The memory BIO always accepts the write, so this is progress. */
+      self->status = FPC_DISUM_TLS_OK;
+      return self->status;
+    }
+
+  self->failed = TRUE;
+  self->status = (self->identity_checked && !self->identity_ok) ? FPC_DISUM_TLS_ERROR_IDENTITY
+                                                                : FPC_DISUM_TLS_ERROR_HANDSHAKE;
+  record_error (self);
+  return self->status;
+}
+
+gboolean
+fpc_disum_tls_is_established (const FpcDisumTls *self)
+{
+  g_return_val_if_fail (self != NULL, FALSE);
+
+  return self->established && !self->failed;
+}
+
+FpcDisumTlsStatus
+fpc_disum_tls_status (const FpcDisumTls *self)
+{
+  g_return_val_if_fail (self != NULL, FPC_DISUM_TLS_ERROR_IO);
+
+  return self->status;
+}
+
+const gchar *
+fpc_disum_tls_error_text (const FpcDisumTls *self)
+{
+  g_return_val_if_fail (self != NULL, NULL);
+
+  return self->error_text;
+}
+
+gsize
+fpc_disum_tls_take_output (FpcDisumTls *self, guint8 *buffer, gsize max_len)
+{
+  BIO *wbio;
+  int pending;
+  int ret;
+
+  g_return_val_if_fail (self != NULL, 0);
+  g_return_val_if_fail (buffer != NULL || max_len == 0, 0);
+
+  if (max_len == 0)
+    return 0;
+
+  wbio = SSL_get_wbio (self->ssl);
+  if (wbio == NULL)
+    return 0;
+
+  pending = BIO_pending (wbio);
+  if (pending <= 0)
+    return 0;
+
+  if ((gsize)pending < max_len)
+    max_len = (gsize)pending;
+  if (max_len > G_MAXINT)
+    max_len = G_MAXINT;
+
+  ret = BIO_read (wbio, buffer, (int)max_len);
+
+  return ret > 0 ? (gsize)ret : 0;
+}
+
+gssize
+fpc_disum_tls_read (FpcDisumTls *self, guint8 *buffer, gsize max_len)
+{
+  int ret;
+
+  g_return_val_if_fail (self != NULL, -1);
+
+  if (!self->established || self->failed)
+    return -1;
+
+  if (max_len == 0)
+    return 0;
+
+  if (max_len > G_MAXINT)
+    return -1;
+
+  ERR_clear_error ();
+  ret = SSL_read (self->ssl, buffer, (int)max_len);
+
+  if (ret > 0)
+    return ret;
+
+  {
+    int error = SSL_get_error (self->ssl, ret);
+
+    if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_ZERO_RETURN)
+      return 0;
+  }
+
+  self->failed = TRUE;
+  self->status = FPC_DISUM_TLS_ERROR_HANDSHAKE;
+  record_error (self);
+  return -1;
+}
+
+gssize
+fpc_disum_tls_write (FpcDisumTls *self, const guint8 *data, gsize len)
+{
+  int ret;
+
+  g_return_val_if_fail (self != NULL, -1);
+
+  if (!self->established || self->failed)
+    return -1;
+
+  if (len == 0)
+    return 0;
+
+  if (len > G_MAXINT)
+    return -1;
+
+  ERR_clear_error ();
+  ret = SSL_write (self->ssl, data, (int)len);
+
+  if (ret > 0)
+    return ret;
+
+  self->failed = TRUE;
+  self->status = FPC_DISUM_TLS_ERROR_HANDSHAKE;
+  record_error (self);
+  return -1;
 }

@@ -70,4 +70,61 @@ FpcDisumEnvelopeStatus fpc_disum_envelope_unseal (
 /* Wipe key material.  Safe on a zeroed struct and safe to call twice. */
 void fpc_disum_psk_clear (FpcDisumPsk *psk);
 
+/*
+ * TLS-PSK channel towards the sensor (SPEC §8).
+ *
+ * The host is the TLS server; the device is the client.  Only TLS 1.2 with
+ * PSK-AES128-CBC-SHA256 is used, the PSK identity must be the reviewed one, and
+ * the ServerHello carries a non-empty session id.  The channel is passive: it
+ * never blocks and never times out on its own, so the caller decides the
+ * no-progress timeout and may simply free the channel to cancel.
+ *
+ * Byte streams: fpc_disum_tls_feed() consumes the payload of EVT_TLS frames and
+ * fpc_disum_tls_take_output() returns the bytes for TLS_DATA fragments.  Neither
+ * boundary carries meaning here; records may be split across any number of calls.
+ */
+#define FPC_DISUM_TLS_DATA_MAX 64
+
+typedef enum
+{
+  /* Progress was made; call again once more input is available. */
+  FPC_DISUM_TLS_OK = 0,
+  /* The handshake needs more device bytes. */
+  FPC_DISUM_TLS_WANT_READ,
+  /* The device did not present the reviewed PSK identity. */
+  FPC_DISUM_TLS_ERROR_IDENTITY,
+  /* Alert, Finished/MAC mismatch or any other TLS protocol failure. */
+  FPC_DISUM_TLS_ERROR_HANDSHAKE,
+  /* Memory BIO failure; no TLS state was advanced. */
+  FPC_DISUM_TLS_ERROR_IO,
+} FpcDisumTlsStatus;
+
+typedef struct _FpcDisumTls FpcDisumTls;
+
+/* Start a server-side channel.  Requires a 32 B PSK; NULL otherwise. */
+FpcDisumTls *fpc_disum_tls_new (const FpcDisumPsk *psk);
+void fpc_disum_tls_free (FpcDisumTls *tls);
+
+/* Feed device bytes (EVT_TLS payload).  Refused once the channel has failed. */
+gboolean fpc_disum_tls_feed (FpcDisumTls *tls, const guint8 *data, gsize len);
+
+/* Drive the handshake with the bytes fed so far. */
+FpcDisumTlsStatus fpc_disum_tls_step (FpcDisumTls *tls);
+gboolean fpc_disum_tls_is_established (const FpcDisumTls *tls);
+FpcDisumTlsStatus fpc_disum_tls_status (const FpcDisumTls *tls);
+
+/* Reason for the last failure, for diagnostics; NULL before a failure.
+ * Contains no key material. */
+const gchar *fpc_disum_tls_error_text (const FpcDisumTls *tls);
+
+/* Drain host->device bytes; call with FPC_DISUM_TLS_DATA_MAX per TLS_DATA transfer. */
+gsize fpc_disum_tls_take_output (FpcDisumTls *tls, guint8 *buffer, gsize max_len);
+
+/* Decrypted application data.  Returns the byte count, 0 if none is ready yet,
+ * or -1 on failure. */
+gssize fpc_disum_tls_read (FpcDisumTls *tls, guint8 *buffer, gsize max_len);
+
+/* Queue application data towards the device.  Returns the byte count or -1. */
+gssize fpc_disum_tls_write (FpcDisumTls *tls, const guint8 *data, gsize len);
+
 G_END_DECLS
