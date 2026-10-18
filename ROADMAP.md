@@ -357,6 +357,20 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
   而不会被报成"设备已移除"（`spec` 未规定此情形，属工程约定）。
 - 未选择 **(B)** 独立守护进程形态（README 允许）：那会失去 fprintd/PAM 集成并作废 M1–M6 的框架整合工作。
 
+### 核心扩展后的真机复跑（2026-10-18 第三轮）
+
+| 观测 | 结果 |
+|---|---|
+| 无手指负例 | **通过**：`open: ok`；驱动自身 30 s 窗口到期并上报**真实错误** `G_IO_ERROR_TIMED_OUT`（"no touch event arrived within the window"），不再是 `REMOVED`；清理 `ARM_STOP`→`ABORT`→`SESSION_OFF` 全部发出 |
+| 取消（ARM 后 3 s） | **通过**：`G_IO_ERROR_CANCELLED`（"Operation was cancelled"），不再被 `REMOVED` 覆盖；close 保留首个根因 |
+| 核心标记 | **已消失**：每轮 open 之前均打印 `re-enumeration expectation released` 且 `open: ok`，运行日志中不再出现 `FP_DEVICE_ERROR_REMOVED` |
+
+**新观测（交规格侧，不影响驱动裁决）**：第二轮 `cancel` 运行时，设备在 ARM 后**立即**返回 `EVT_ARM_RESULT` 且第三字段 = **保留值 0x64**，
+驱动按 §16.1 第 419 行如实判定"当前事务失败"（`the arm result carries the reserved state value`）。
+该取值在 §10 行 3 已按"不可复现/不可达"结项，本次却在**完全干净的 Linux 路径**上复现——紧接上一轮"窗口到期 + 清理"之后，全程未做任何被禁的配置动作。
+第三轮重跑同一用例**未再复现**（ARM 正常、取消正常），与 §16.4 的"reset/残留状态"家族现象一致，属**间歇性残留**。
+⇒ 建议规格侧把 §10 行 3 由"不可达"修订为"间歇可达（干净路径亦可，发生在紧接前一轮会话之后）"，并记录与 §16.4 残留现象的疑似同源关系。
+
 ## 开发规则
 
 1. 每个里程碑先写能捕获真实边界/状态错误的测试，再实现；构造人工输入不等于被测 C 实现已通过。
