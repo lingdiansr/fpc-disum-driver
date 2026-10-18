@@ -28,6 +28,10 @@
 #define CAPTURE_GUARD_MS 90000
 #define OPEN_GUARD_MS 60000
 
+/* SPEC §4.5 操作前提: a press is wanted only while a capture waits for the
+ * finger; capture_once() sets it and the cue handler below reads it. */
+static gboolean press_wanted;
+
 static gboolean
 cancel_cb (gpointer user_data)
 {
@@ -194,13 +198,11 @@ capture_once (FpDevice *device, guint cancel_after_ms)
   press_wanted = FALSE;
 }
 
-int
-    /* SPEC §4.5 操作前提: the host must give a perceptible cue at the moment ARM goes
-     * out, and the operator presses only afterwards and holds.  The finger-status
-     * signal reaches the host exactly at that transition, so the cue belongs there;
-     * a desktop notification works even when this tool runs from another terminal,
-     * and the bell covers environments without a notification daemon. */
-    static gboolean press_wanted;
+/* SPEC §4.5 操作前提: the host must give a perceptible cue at the moment ARM goes
+ * out, and the operator presses only afterwards and holds.  The finger-status
+ * signal reaches the host exactly at that transition, so the cue belongs there;
+ * a desktop notification works even when this tool runs from another terminal,
+ * and the bell covers environments without a notification daemon. */
 
 static void
 cue_operator (void)
@@ -226,6 +228,7 @@ on_finger_status_changed (GObject *object, GParamSpec *pspec)
     cue_operator ();
 }
 
+int
 main (int argc, char **argv)
 {
   const gchar *command;
