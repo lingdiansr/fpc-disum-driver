@@ -3,6 +3,10 @@
 本仓库是**净室实现侧的 libfprint 派生源码树**：目标设备采用 **libfprint 内置图像驱动**路线，
 仅依据下面两份交付文件实现设备协议，不接触研究侧材料。
 
+项目/仓库标签是 `xiaomi-fpc-driver`；驱动、模块与注册 ID 沿用**设备族**名 `fpc_disum` —— 目标设备厂商标识是
+Fingerprint Cards AB（`10A5:9201`），上游 libfprint 也按传感器族命名驱动（`fpcmoc`、`egismoc`、`goodixmoc`…），
+按整机品牌命名会宣称本侧不具备的 OEM 覆盖范围（完整理由见 ROADMAP「命名」）。
+
 ## 交付包（本仓库唯一允许的规格来源）
 
 | 文件 | 大小 | SHA-256 |
