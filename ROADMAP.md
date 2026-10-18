@@ -30,6 +30,20 @@
 
 **命名（2026-10-18 决定）**：项目/仓库标签用 `xiaomi-fpc-driver`；驱动、模块、测试与注册 ID 一律用**设备族**名 `fpc_disum` / `fpc-disum`。三条依据：目标设备的厂商标识是 **Fingerprint Cards AB**（§1：VID `10A5`），本侧只覆盖这一颗传感器与固件 `0x0250`；上游 libfprint 按传感器族命名驱动（`fpcmoc`、`egismoc`、`goodixmoc`、`elanmoc`、`focaltech_moc`…），不存在按整机品牌命名的先例；用整机品牌命名会宣称本侧不具备的 OEM 覆盖范围。规格（冻结）也以 “FPC Disum” 称呼该设备，同名便于逐条对照。
 
+按上游惯例逐层落定（供 M5 照此填写）：
+
+| 层 | 上游惯例（实例） | 本项目取值 |
+|---|---|---|
+| 驱动目录 | `libfprint/drivers/<driver>/`（`egismoc/`、`elanmoc/`、`realtek/`） | `libfprint/drivers/fpc_disum/` ✅ |
+| 驱动 ID | `#define FP_COMPONENT "<driver>"` → `dev_class->id`（`fpcmoc`、`focaltech_moc`） | `fpc_disum` ✅ |
+| 人读名 | `dev_class->full_name` 用“厂商 + 产品”（`"FPC MOC Fingerprint Sensor"`、`"Elan MOC Sensors"`、`"Focaltech MOC Sensors"`） | `"FPC Disum Fingerprint Sensor"`（M5 填） |
+| 主源文件 | `<driver>.c`（`egismoc.c`、`elanmoc.c`）或缩写（`fpcmoc`→`fpc.c`、`goodixmoc`→`goodix.c`） | `fpc_disum/fpc_disum.c`（M5） |
+| 次级模块 | 按角色命名、设备前缀（`goodix_proto.c`、`bmkt_message.c`） | `fpc_disum_proto/tls/session/usb.c` ✅ |
+| 设备级测试变体目录 | `tests/<driver>-<PID>/`（`egismoc-0586`、`focaltech_moc-6553`、`realtek-5816`，后缀为 USB PID） | `tests/fpc_disum-9201/`（仅在需要设备级仿真数据时） |
+| 仓库/项目标签 | **上游无此层**（只有 `libfprint` 一个仓库） | 现为 `xiaomi-fpc-driver`；若要求完全对齐惯例则为 `fpc-disum-driver` |
+
+小米只作为**来源说明**存在（”目标设备出现在某台小米笔记本上”），不进入任何标识符；驱动侧名字表达的是“支持哪颗传感器”。
+
 ## 分层与代码落点
 
 后续实现跟随上游目录约定，不另建平行驱动框架：
