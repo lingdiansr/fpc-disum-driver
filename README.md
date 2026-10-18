@@ -1,4 +1,4 @@
-# fpc-disum-driver — FPC 传感器 (10a5:9201) Linux 驱动（净室实现侧）
+# xiaomi-fpc-driver — FPC 传感器 (10a5:9201) Linux 驱动（净室实现侧）
 
 本仓库是**净室实现侧的 libfprint 派生源码树**：目标设备采用 **libfprint 内置图像驱动**路线，
 仅依据下面两份交付文件实现设备协议，不接触研究侧材料。
