@@ -163,12 +163,18 @@ capture_once (FpDevice *device, guint cancel_after_ms)
 
   if (cancel_after_ms > 0)
     {
+      /* No press is wanted here: this capture is cancelled shortly. */
+      press_wanted = FALSE;
       printf ("capture: starting, will cancel after %u ms\n", cancel_after_ms);
       g_timeout_add (cancel_after_ms, cancel_cb, cancellable);
     }
   else
     {
-      printf ("capture: waiting for the finger (driver window 30000 ms)\n");
+      /* SPEC §4.5 操作前提: a press is wanted, and the cue is emitted the moment
+       * the device is armed (see on_finger_status_changed). */
+      press_wanted = TRUE;
+      printf ("capture: waiting for the finger (driver window 30000 ms)\n"
+              "         press as soon as the cue appears, then hold it for >= 10 s\n");
     }
 
   guard = g_timeout_add (CAPTURE_GUARD_MS, cancel_cb, cancellable);
@@ -184,9 +190,42 @@ capture_once (FpDevice *device, guint cancel_after_ms)
     {
       print_error ("capture", error);
     }
+
+  press_wanted = FALSE;
 }
 
 int
+    /* SPEC §4.5 操作前提: the host must give a perceptible cue at the moment ARM goes
+     * out, and the operator presses only afterwards and holds.  The finger-status
+     * signal reaches the host exactly at that transition, so the cue belongs there;
+     * a desktop notification works even when this tool runs from another terminal,
+     * and the bell covers environments without a notification daemon. */
+    static gboolean press_wanted;
+
+static void
+cue_operator (void)
+{
+  gchar *notify;
+
+  fputs ("\a\n*** ARM SENT -- PRESS THE SENSOR NOW AND HOLD IT (>= 10 s) ***\n", stdout);
+  fflush (stdout);
+
+  notify = g_strdup_printf ("notify-send -u critical -t 0 '%s' '%s'", "FPC Disum: ARM sent",
+      "Press the sensor now and hold it (>= 10 s)");
+  g_spawn_command_line_async (notify, NULL);
+  g_free (notify);
+  g_spawn_command_line_async ("canberra-gtk-play -i bell", NULL);
+}
+
+static void
+on_finger_status_changed (GObject *object, GParamSpec *pspec)
+{
+  FpDevice *device = FP_DEVICE (object);
+
+  if (press_wanted && (fp_device_get_finger_status (device) & FP_FINGER_STATUS_NEEDED) != 0)
+    cue_operator ();
+}
+
 main (int argc, char **argv)
 {
   const gchar *command;
@@ -221,6 +260,8 @@ main (int argc, char **argv)
   /* The context, not the device, owns the libusb context: keep it for the run. */
   context = fp_context_new ();
   device = find_device (context);
+
+  g_signal_connect (device, "notify::finger-status", G_CALLBACK (on_finger_status_changed), NULL);
   if (device == NULL)
     return 1;
 

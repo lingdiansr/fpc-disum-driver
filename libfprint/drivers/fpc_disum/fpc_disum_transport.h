@@ -69,10 +69,12 @@ struct _FpcDisumTransport
    */
   void (*reenumeration_expected) (FpcDisumTransport *transport, gboolean expected);
   /*
-   * One bulk IN read from EP 0x82.  A read may return any length up to the endpoint
-   * packet size, and neither that length nor a short packet carries frame meaning
-   * (SPEC §3.2/§4.4); a read that returns no bytes at all is reported as
-   * FPC_DISUM_TRANSPORT_OK with @len 0 when the device has nothing to send.
+   * One bulk IN read from EP 0x82.  The transport asks for a multi-packet chunk
+   * because single-packet reads lose frames (SPEC §4.4/§5); a read may return any
+   * length up to that chunk, and neither the length nor a short packet carries
+   * frame meaning (SPEC §3.2/§4.4).  A read that returns no bytes at all is
+   * reported as FPC_DISUM_TRANSPORT_OK with @len 0 when the device has nothing to
+   * send.
    */
   void (*bulk_read) (
       FpcDisumTransport *transport, FpcDisumTransportDataFunc done, gpointer user_data);

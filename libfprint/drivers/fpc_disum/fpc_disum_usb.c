@@ -29,7 +29,12 @@
 
 /* SPEC §1/§3.2: the only data endpoint is 0x82 IN BULK, maxPacketSize 64. */
 #define FPC_DISUM_USB_BULK_IN_EP 0x82
-#define FPC_DISUM_USB_BULK_PACKET_SIZE 64
+
+/* SPEC §4.4/§5: frame boundaries are not carried by packets and single-packet
+ * reads lose frames -- the image segment alone is 11 back-to-back EVT_TLS
+ * frames.  The reference keeps draining the endpoint with a blocking read and a
+ * short timeout, so a multi-packet chunk is requested instead of one packet. */
+#define FPC_DISUM_USB_BULK_READ_SIZE 4096
 
 /* SPEC §1: a single interface, num 0, alt 0. */
 #define FPC_DISUM_USB_INTERFACE 0
@@ -38,9 +43,10 @@
  * keeps a stalled device from wedging the session. */
 #define FPC_DISUM_USB_CONTROL_TIMEOUT_MS 5000
 
-/* SPEC §3.2: a bulk IN read must complete with zero bytes when the device has
- * nothing to send, so the session can keep polling; this timeout bounds it. */
-#define FPC_DISUM_USB_BULK_TIMEOUT_MS 1000
+/* SPEC §3.2/§5: a bulk IN read completes with zero bytes when the device has
+ * nothing to send, and draining must not pause -- this bounds the idle wait only
+ * (data is returned as soon as it arrives). */
+#define FPC_DISUM_USB_BULK_TIMEOUT_MS 100
 
 /* SPEC §6 step 4: the device gets up to 20 s to come back after CMD_INIT, and
  * every look for it is a fresh enumeration, 0.2 s apart. */
@@ -92,7 +98,7 @@ typedef struct
   /* One buffer per direction: the interface serialises operations (SPEC §3.2). */
   guint8 control_in[FPC_DISUM_USB_CONTROL_IN_MAX];
   guint8 control_out[FPC_DISUM_USB_CONTROL_OUT_MAX];
-  guint8 bulk[FPC_DISUM_USB_BULK_PACKET_SIZE];
+  guint8 bulk[FPC_DISUM_USB_BULK_READ_SIZE];
 } FpcDisumUsbPrivate;
 
 typedef enum

@@ -13,7 +13,7 @@
 
 | 文件 | 固定 SHA-256 |
 |---|---|
-| [CLEANROOM_SPEC.md](docs/CLEANROOM_SPEC.md) | `3968405fa2778b3d94a6dfed3ec7237d04c1e3bc029833aabc82b76447afa30e` |
+| [CLEANROOM_SPEC.md](docs/CLEANROOM_SPEC.md) | `e1a5d7d58c6903f9bcb4d862ef69d00cf45d2be1fd3d9b582c1f7bad586b08dc` |
 | [CLEANROOM_TEST_VECTORS.json](docs/CLEANROOM_TEST_VECTORS.json) | `ce04ce43665f2b2d27142f2c2ecd917b09219a87a82d4b3009c023baecfeda94` |
 
 上游代码只提供通用框架、API、算法和编码惯例；其中其他设备的驱动、公开录制样本和图像不是本传感器的协议依据。不得访问研究侧仓库、真实 PSK/图像、专有二进制、抓包或反编译产物来补实现。
