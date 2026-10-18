@@ -135,14 +135,25 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 独立审查后补齐：清零断言改用布尔形式，避免失败日志输出残留密钥字节；有效向量必须声明 `psk_b64`（删除该字段现在会被独立验证拒绝，并新增回归用例）；新增“仅翻转签名末字节”用例以直接验证完整 32 B 比较；NULL envelope 失败路径也断言输出被清零。
 
-## M3：TLS 内存通道
+## M3：TLS 内存通道（已完成）
 
-- [ ] 以宿主为 TLS server、设备为 client，使用 TLS 1.2 和 `PSK-AES128-CBC-SHA256`，验证 `Disum PSK` identity。
-- [ ] 配置非空 session_id；握手由 OpenSSL 状态驱动，不把观测到的六次发送硬编码成握手算法。
-- [ ] 经 memory BIO 消费 `EVT_TLS` payload，向 USB 层交付不超过 64B 的片段；USB 包边界、事件帧边界和 TLS 记录边界互不混同。
-- [ ] Finished/MAC、alert、无进展超时与取消均有独立失败路径；握手未完成时禁止 ARM/GET_IMG。
+- [x] 以宿主为 TLS server、设备为 client，使用 TLS 1.2 和 `PSK-AES128-CBC-SHA256`，验证 `Disum PSK` identity。
+- [x] 配置非空 session_id；握手由 OpenSSL 状态驱动，不把观测到的六次发送硬编码成握手算法。
+- [x] 经 memory BIO 消费 `EVT_TLS` payload，向 USB 层交付不超过 64B 的片段；USB 包边界、事件帧边界和 TLS 记录边界互不混同。
+- [x] Finished/MAC、alert、无进展超时与取消均有独立失败路径；握手未完成时禁止 ARM/GET_IMG。
 
 **完成判据**：使用人工 PSK 与本地合成 TLS client 完成握手和应用数据往返；分段、错误 PSK、alert、取消和超时不泄漏状态，不访问真实设备。
+
+**本轮实际验收**：
+
+| 项 | 结果 |
+|---|---|
+| `test-fpc-disum-channel` | 10 个用例：握手、1 字节分片握手、身份不符、PSK 不符、握手期 fatal alert、部分记录后补齐、握手期取消、PSK 长度、失败后拒绝输入、应用数据往返 |
+| 三套构建 | LLVM、严格 ASan/UBSan、GCC 下 `cleanroom` 4/4 与原生 7/7 全部通过（sanitizer 覆盖中途取消的泄漏检查） |
+| 变异 | 身份比较恒真 ⇒ `rejects-wrong-identity` 失败；（session 缓存与 session_id_context 的变异未改变 OpenSSL 3.6 的可观察行为，说明非空 session_id 由库默认产生，断言保留为对可观察契约的固定检查） |
+| 静态分析 | 定向 clang-tidy 覆盖 `fpc_disum_tls.c` 与新测试，无启用规则诊断 |
+
+实现要点：通道是被动的——不阻塞、不自己计时；调用方决定无进展超时，直接释放通道即为取消。握手完全由 `SSL_do_handshake` 状态驱动，不硬编码飞行次数；`feed()/take_output()` 不感知 USB 包或外层帧边界，记录可任意切分，输出按调用方给的 64 B 上限分片。PSK 必须为 32 B；失败后拒绝输入并保留可读诊断（`error_text`，不含密钥）；释放时擦除 PSK 拷贝。PSK 身份不符单独报告为 `ERROR_IDENTITY`，其余 TLS 层失败（alert、Finished/MAC、其他协议错误）归为 `ERROR_HANDSHAKE`，BIO 故障为 `ERROR_IO`。
 
 ## M4：USB 与单次采集状态机
 

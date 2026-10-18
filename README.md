@@ -45,9 +45,10 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0/M0.1/M1/M2 已完成；TLS 握手通道（M3）与 USB 采集（M4）尚未实现**；仍未注册 `fpc_disum` 或 `10a5:9201`，没有任何采图实现。
+- **当前状态：M0–M3 已完成；USB 采集状态机（M4）与驱动注册（M5）尚未实现**；仍未注册 `fpc_disum` 或 `10a5:9201`，没有任何采图实现。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
+- 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
 - 上游框架及其他型号驱动不是本传感器的协议来源；原有公开录制测试数据不作为本项目的净室验收输入。
 - Git 本地开发分支为 `main`，上游 remote 为 `upstream`。不自动提交本侧修改，也不执行 push。
 - 本侧对上游的必要构建修正：`tests/meson.build` 的无 GI 分支使用键、值双变量遍历驱动字典，以支持固定版本 Meson 的 C-only 配置；未改变测试行为。
@@ -95,7 +96,8 @@ for profile in llvm sanitizers gcc; do
   uv tool run --from meson==1.12.1 meson test -C "_build/$profile" \
     --suite cleanroom --print-errorlogs || exit $?
   uv tool run --from meson==1.12.1 meson test -C "_build/$profile" \
-    fpc-disum-protocol fpc-disum-tls fpi-device fpi-ssm fp-context fp-device \
+    fpc-disum-protocol fpc-disum-tls fpc-disum-channel \
+    fpi-device fpi-ssm fp-context fp-device \
     --print-errorlogs || exit $?
 done
 ```
