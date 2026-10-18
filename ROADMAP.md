@@ -1,0 +1,182 @@
+# FPC Disum libfprint 内置驱动 ROADMAP
+
+## 目标与已选路线
+
+在 libfprint 源码树内独立实现 `10a5:9201 / bcdDevice=0x0250` 的 Linux **单次图像采集**驱动，覆盖初始化、安全通道、事件触发采图以及失败/取消/关闭。不是独立守护进程，也不复刻 Windows 匹配引擎。
+
+- **Architecture**：沿用上游 `FpImageDevice`、GLib 主循环、`FpiSsm`、`FpiUsbTransfer`/GUsb；目标设备协议仅来自净室交付包。TLS 使用进程内 OpenSSL memory BIO，不增加网络服务或 OpenSSL 子进程。
+- **Tech stack**：保留上游 GNU C99/C++、GLib/GObject/GIO、GUsb 和 Meson/Ninja；LLVM/LLD 为日常开发工具，ASan/UBSan 与定向 clang-tidy 为质量检查，GCC 为兼容构建。密码学阶段接入 OpenSSL 3；Python 3.11+ 仅用于基线检查和测试驱动。
+- **上游基线**：官方 `https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING` 和原文件版权，沿用 LGPL-2.1-or-later。
+- **当前交付范围**：M0 源码树初始化与 M0.1 质量工具链；不注册没有实现的 `fpc_disum` 驱动，不伪造采集成功。
+
+## 唯一设备协议输入
+
+| 文件 | 固定 SHA-256 |
+|---|---|
+| [CLEANROOM_SPEC.md](docs/CLEANROOM_SPEC.md) | `f609db776be1fb340a7ee399d6bdc852a455ebc25d53ddfe941c9760cd0b341a` |
+| [CLEANROOM_TEST_VECTORS.json](docs/CLEANROOM_TEST_VECTORS.json) | `ce04ce43665f2b2d27142f2c2ecd917b09219a87a82d4b3009c023baecfeda94` |
+
+上游代码只提供通用框架、API、算法和编码惯例；其中其他设备的驱动、公开录制样本和图像不是本传感器的协议依据。不得访问研究侧仓库、真实 PSK/图像、专有二进制、抓包或反编译产物来补实现。
+
+`IMPLEMENTATION_REVIEW.md` 为历史评审记录，不覆盖本表基线。规格发现缺漏或规范冲突时只记录现象与缺失条件，交回维护方修订并复核；不自行猜测设备行为，也不修改交付包来迎合代码。
+
+## 范围与硬边界
+
+**纳入**：单次采图、112×88 灰度像素、初始化/句柄迁移、TLS-PSK、分帧与应用消息解析、取消/超时/错误及资源回收、合成输入与离线状态机验收。
+
+**不纳入**：设备侧 `ARM wValue=2`、`END_ENROL` 驱动流程、完整抬指/重按录入生命周期、reset/设备重现后的自动恢复认证、DFU、其他 VID/PID 或固件、Windows 模板/算法和 Windows Hello 协议。
+
+真实采集、取得设备密钥或改变设备状态的实验必须另获明确授权。本轮的构建和测试不读取或控制目标传感器；默认开发配置只编译上游虚拟驱动。不得安装到系统、替换系统 libfprint、改动 fprintd/PAM/udev 或修改 USB 电源策略来证明初始化成功。
+
+## 分层与代码落点
+
+后续实现跟随上游目录约定，不另建平行驱动框架：
+
+| 责任 | 代码落点（在对应里程碑创建） | 依赖与边界 |
+|---|---|---|
+| 外层/应用消息解析 | `libfprint/drivers/fpc_disum/fpc_disum_proto.c`、`fpc_disum_proto.h` | 不访问 USB，不命名未知字段；保留第三字段和未消费字节 |
+| envelope 认证与 TLS | `libfprint/drivers/fpc_disum/fpc_disum_tls.c`、`fpc_disum_tls.h` | OpenSSL EVP/BIO；不得自己实现密码学或降级到未约定布局 |
+| USB/会话状态机与图像驱动 | `libfprint/drivers/fpc_disum/fpc_disum.c`、`fpc_disum.h` | `FpImageDevice`、`FpiSsm` 与异步传输；一条主循环管理所有权和取消 |
+| 原生验收 | `tests/test-fpc-disum-protocol.c`、`test-fpc-disum-tls.c`、`test-fpc-disum-session.c` | 执行真正的 C 实现；人工向量重建器只构造输入，不代替被测实现 |
+| 构建注册 | 根 `meson.build`、`libfprint/meson.build`、`tests/meson.build` | 只有驱动具备真实成功与失败路径后才注册目标 ID |
+
+每个模块明确输入长度、缓冲所有权、未消费尾部和错误阶段。优先使用借用视图与有界缓冲，避免为每个 USB 包或应用帧进行不必要分配和复制。
+
+## M0：工程初始化（已完成）
+
+- [x] 引入固定 commit 的上游 libfprint，建立本地 Git 开发分支，保留净室文件及历史评审。
+- [x] 提供独立的固定哈希检查命令；文件被改动、文件缺失或校验清单被同步改写时均失败。
+- [x] Meson 配置时执行净室基线检查，并将其完整性回归检查加入 `cleanroom` 测试组。
+- [x] 使用虚拟驱动配置构建真实的 libfprint 库及测试程序，不注册或声明支持 `10a5:9201`。
+- [x] 运行基线检查、完整性负例和不依赖录制指纹图像的原生框架测试，记录实际结果。
+
+**完成判据**：新开发者能按 README 完成配置、编译和上述离线检查；不需要 root，不触发真实设备，不修改系统安装。本轮结束时只把实际完成的条目标记为完成。
+
+**本轮实际验收**：Meson 1.12.1、GCC 16.2.1，debug 配置，只编译三个虚拟驱动，显式关闭可选 GI 绑定。配置及库/示例/测试程序编译成功；`cleanroom` 两个测试目标全部通过，`fpi-device`、`fpi-ssm`、`fp-context`、`fp-device` 四个原生测试目标全部通过。独立命令确认两份已复核输入匹配固定哈希，缺失输入返回失败。未执行录制图像用例或真实采集。
+
+无 GI 配置暴露了上游 `tests/meson.build` 的字典遍历变量错误；本侧将该分支改成与正常分支一致的键、值双变量遍历，配置由失败转为成功，没有修改测试用例行为。
+
+
+## M0.1：LLVM 质量工具（已完成）
+
+- [x] 修复已复现的虚拟图像驱动与原生测试回调签名，不改变公共/内部 API，不通过强转或关闭 sanitizer 掩盖问题。
+- [x] 使用 `dev/native/common.ini`、`llvm.ini`、`gcc.ini`、`sanitizers.ini` 定义三套独立 Meson 构建；保留 GNU C99 和原有虚拟驱动安全范围。
+- [x] `.clangd` 使用 LLVM 开发构建的编译数据库；`.clang-format` 仅复刻 GNU/uncrustify 风格以约束自动格式化，uncrustify 仍是唯一权威格式规范。
+- [x] `.clang-tidy` 及 `.clang-tidy-include` 检查新增驱动代码和本轮修正的源文件；使用 Meson 生成的 Ninja 原生分析目标，不自动应用修复。
+- [x] sanitizer 测试默认在首个 UBSan 错误处失败，保留全部 `address,undefined` 检查，不增加 suppression。
+- [x] LLVM、严格 sanitizer、GCC 三套构建均运行相同的 2 个 cleanroom 和 4 个原生测试目标；定向静态分析返回成功。
+
+**完成判据**：先前会触发 UBSan 的回调路径在现有生命周期用例下通过；三个构建目录不混用编译器/插桩产物，开发命令和实际验收一致。M1 起增加了协议解析测试，M0.1 的各项门禁随之覆盖它们。
+
+**本轮实际验收**（Meson 1.12.1；数字为该里程碑当时的测试集合，M1 新增测试后总数见 M1 记录）：
+
+| 配置/检查 | 结果 |
+|---|---|
+| LLVM/LLD 23.1.1，`_build/llvm` | 配置、构建成功，6/6 指定离线测试目标通过 |
+| LLVM 23.1.1 + ASan/UBSan，`_build/sanitizers` | 配置、构建成功，严格模式下同一组 6/6 目标通过，未关闭函数类型检查 |
+| GCC 16.2.1/BFD，`_build/gcc` | 配置、构建成功，同一组 6/6 目标通过 |
+| clang-tidy | 配置有效，Ninja 内置目标及直接指定的三个维护中编译单元分析成功 |
+| clangd | 自动读取 `_build/llvm/compile_commands.json`，虚拟图像驱动检查完成、0 errors |
+
+修复前，严格 UBSan 在虚拟 open/close、SSM 数据析构和 identify 超时测试中报告了不兼容回调；修复采用精确签名的静态适配器和通用参数类型，保留时序、所有权与原有行为断言。上游 C99 重复 typedef 编译告警仍可见，本记录不宣称全库 warning-free。
+
+
+静态门禁另以临时的空指针解引用输入做过负例烟测：`clang-analyzer-core.NullDereference` 被提升为错误，clang-tidy 返回 1；临时文件已移除。该检查验证诊断会导致失败，不向仓库加入故意错误的源码或空测试入口。
+
+## M1：纯协议解析（已完成）
+
+- [x] 实现大端 12B 外层头；收到前 8B 立即检查 `12..65536` 长度，支持跨包、多帧、空读与超时保留部分输入。
+- [x] 未知 code 和第三字段原样交付；非法长度/不完整尾部不静默丢弃、不逐字节重同步。
+- [x] 应用分帧与 capture 接受检查分离：分帧可交付 22B 消息，capture 只接受 `code=8 / total_len=9880`。
+- [x] 按 `12B 帧头 + 12B 内层头 + 9856B 像素` 定位数据；stride=112、8-bit、无旋转/翻转/转置。
+
+**完成判据**：通过 10 条外层帧和 2 条应用消息向量；原生 C 测试额外证明非法输入不会越界读写、错误后不会伪报完整图像。五条像素向量按附录 B 重建并校验，相关性仅作结构筛查。
+
+**本轮实际验收**：
+
+| 项 | 结果 |
+|---|---|
+| `tools/fpc_disum_vectors.py --verify` | 22/22 向量从声明式描述重建并与录制期望一致（10 外层帧、2 应用消息、5 像素、5 envelope 结构） |
+| `test-fpc-disum-protocol` | 19 个用例：7 个边界/生命周期 + 10 个外层帧向量 + 2 个应用消息向量 |
+| 三套构建 | LLVM、严格 ASan/UBSan、GCC 下 `cleanroom` 4/4 与原生 5/5 全部通过 |
+| 变异验证 | 长度上界改为 `>=` ⇒ 长度边界用例失败；像素偏移改为 12 ⇒ 图像定位用例失败；去掉缓冲区上限检查 ⇒ 新增长度上限用例失败（均已还原） |
+| 静态分析 | 定向 clang-tidy 覆盖 `fpc_disum_proto.c` 与测试，无启用规则诊断 |
+
+独立审查后补齐：`feed()` 拒绝无法由 `GByteArray` 表示的超大读取（原先会被 `guint` 静默截断并报成功）；重建器要求固定 22 个向量 ID 完整存在、逐项比对 envelope 的六个结构字段、要求像素期望五个字段齐全；语料目标把交付 JSON 声明为构建输入，向量文件变化会触发重新生成。
+
+实现要点：`fpc_disum_proto.c` 在 8 字节即可判定长度，非法长度保留全部已收字节并停止推进（不再消费后续输入）；分帧层只校验 12B 头，capture 层再用 `fpc_disum_frame_get_image()` 要求 `code=8 / total_len=9880` 且 24B 前缀与像素面精确闭合。
+
+像素向量的五条指标（重叠区 Pearson、截断量化、三位小数）由重建器按附录 B 计算并比对；驱动不实现该结构筛查，也不把它当作指纹质量判据。
+
+语料由构建时生成（`tests/fpc-disum-corpus.c`），C 测试执行真实解析器；`tests/test-cleanroom-vectors.py` 用篡改指标、哈希、拒绝阶段、未知 kind、非 synthetic 文档等负例保证重建器不会空过。为避免编辑器把新文件改成别种风格，新增根 `.clang-format` 复刻 GNU/uncrustify 风格，uncrustify 仍是唯一权威格式规范。
+
+fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFuzzer 需单独构建配置，列为后续工作。
+
+## M2：envelope 与密码学拒绝路径（已完成）
+
+- [x] 从 7 个小端 u32 读取字段，不硬编码有效样例的偏移；未定名的 16B 区间不赋予语义。
+- [x] 按当前规格执行 `长度/magic → 字段范围 → AES → HMAC`，范围检查使用不会整数溢出的形式。
+- [x] 采用约定的 NUL 结尾串派生密钥、AES-256-CBC NoPadding 和完整 HMAC-SHA256；只有完整验签成功才允许将 PSK 用于会话。
+- [x] 为拒绝输入报告规定的第一个失败阶段；不把 `field-bounds` 失败变成后续 HMAC 失败，也不尝试短签名/72B 布局。
+
+**完成判据**：5 条 envelope 向量通过；移除范围检查后，新越界向量必须因 `reject_stage` 不符而失败。日志、测试失败信息不输出真实 PSK。
+
+**本轮实际验收**：
+
+| 项 | 结果 |
+|---|---|
+| `test-fpc-disum-tls` | 14 个用例：9 个边界/生命周期 + 5 个 envelope 向量 |
+| 三套构建 | LLVM、严格 ASan/UBSan、GCC 下 `cleanroom` 4/4 与原生 6/6 全部通过 |
+| 变异 1（完成判据） | `range_within()` 改为恒真 ⇒ `signature-offset-out-of-range-rejected` 的阶段变成 `hmac`，按 `reject_stage` 断言失败 |
+| 变异 2 | 去掉 `EVP_CIPHER_CTX_set_padding (ctx, 0)` ⇒ 有效向量在 AES 阶段被拒（status=4），复现规格警告的 OpenSSL 默认填充问题 |
+| 静态分析 | 定向 clang-tidy 覆盖 `fpc_disum_tls.c` 与测试，无启用规则诊断 |
+
+实现要点：7 个小端 u32 全部由头部切片；未定名区间不做任何解释（测试翻转该区间后仍接受且 PSK 不变）；HMAC 覆盖 `AAD ‖ 密文` 并用 `CRYPTO_memcmp` 常量时间比较；派生密钥、摘要与 PSK 全部用 `OPENSSL_cleanse` 擦除；任何失败都清空调用方缓冲并把 `psk_len` 置 0；不打印 PSK。envelope 只保证 key 区间按 16 字节对齐，调用方（M3）需自行要求 `psk_len == 32`。
+
+独立审查后补齐：清零断言改用布尔形式，避免失败日志输出残留密钥字节；有效向量必须声明 `psk_b64`（删除该字段现在会被独立验证拒绝，并新增回归用例）；新增“仅翻转签名末字节”用例以直接验证完整 32 B 比较；NULL envelope 失败路径也断言输出被清零。
+
+## M3：TLS 内存通道
+
+- [ ] 以宿主为 TLS server、设备为 client，使用 TLS 1.2 和 `PSK-AES128-CBC-SHA256`，验证 `Disum PSK` identity。
+- [ ] 配置非空 session_id；握手由 OpenSSL 状态驱动，不把观测到的六次发送硬编码成握手算法。
+- [ ] 经 memory BIO 消费 `EVT_TLS` payload，向 USB 层交付不超过 64B 的片段；USB 包边界、事件帧边界和 TLS 记录边界互不混同。
+- [ ] Finished/MAC、alert、无进展超时与取消均有独立失败路径；握手未完成时禁止 ARM/GET_IMG。
+
+**完成判据**：使用人工 PSK 与本地合成 TLS client 完成握手和应用数据往返；分段、错误 PSK、alert、取消和超时不泄漏状态，不访问真实设备。
+
+## M4：USB 与单次采集状态机
+
+- [ ] 在 GUsb/FpiUsbTransfer 的生命周期内实现 §6；`CMD_INIT` 后关闭/重开句柄、重新 claim 和重建 reader，再执行 GET_TLS_KEY/TLS_INIT。
+- [ ] 目标配置已生效时不再发送 SET_CONFIGURATION；不得以端口 reset 或固定延时“修好”初始化。
+- [ ] `EVT_INIT_RESULT` 只作通知，不作为额外门控；等到 `EVT_FINGER_DWN` 后才发 GET_IMG。
+- [ ] 不依赖一次采集恰好 11/12 个 TLS 帧，按解密流和消息边界完成图像。
+- [ ] 未知事件失败、已知无关事件忽略；未知第三字段不猜语义，`EVT_ARM_RESULT(value=0x64)` 按约定失败。
+
+**完成判据**：合成传输事件驱动真实会话状态机，验证命令编码、顺序、握手门控、缺触摸不发 GET_IMG 和错误阶段。真机验证单独授权，不用它替代可确定性的离线验收。
+
+## M5：内置图像驱动与取消/关闭
+
+- [ ] 将采集状态机接入 `FpImageDevice` 的 open/activate/deactivate/close 入口，用真实图像完成回调，不注册空实现。
+- [ ] 仅匹配约定的目标设备和固件；不因相近的 FPC 型号推断兼容性，不冒充现有 `fpcmoc` 驱动。
+- [ ] 任意异步阶段取消后停止输入推进，取消在途请求；已 ARM 时执行 ARM_STOP，再 ABORT、SESSION_OFF。
+- [ ] cleanup 错误不覆盖首个根因；关闭前释放 BIO/SSL、PSK、USB 和回调所有权；下一次 open 必须新建会话。
+- [ ] 区分取消、无手指超时、协议失败、TLS 失败和 USB 失败；reset/设备重现不能自动恢复认证资格。
+
+**完成判据**：在所有挂起点取消、失败后 close/reopen、重复关闭等生命周期用例不泄漏、不悬空回调、不重复完成动作；完成真实路径后才加入 Meson 驱动表和设备 ID。不得将通用上层录入 API 的存在解释为本传感器录入生命周期已验证。
+
+## M6：受控真机验收与交付
+
+- [ ] 先完成 22 条向量、原生状态机测试和 ASan/UBSan 检查，再申请具体范围的硬件实验授权。
+- [ ] 经授权验证：无手指负例、单次采图、超时/取消、取消后再开与 close/reopen；只声明实际验证的能力。
+- [ ] 敏感产物使用独立 0700 目录、0600 文件；真实图像、PSK/envelope、设备日志不进入 Git、CI 附件或净室交付包。
+- [ ] 默认不替换系统 libfprint、不启用 PAM/登录验证；任何系统部署或认证实验另行确认。
+- [ ] 发布时列明净室哈希、上游 commit、实际支持范围、已运行验收和永久未支持项，维护干净侧接触声明。
+
+**完成判据**：约定范围内的功能可由运行证据证明，仓库没有假成功路径；未验证能力没有被宣传为支持。上游提交和桌面认证扩展不与单次采图验收混为一谈。
+
+## 开发规则
+
+1. 每个里程碑先写能捕获真实边界/状态错误的测试，再实现；构造人工输入不等于被测 C 实现已通过。
+2. C 代码遵循上游 GLib 风格和资源所有权惯例，不引入独立线程框架、网络守护进程或第二套驱动抽象。
+3. 每次修改运行受影响的离线用例；合并前检查完整净室基线及全部已实现测试。
+4. 不将本 ROADMAP 当作新增设备协议来源；事实缺口必须回到规格维护流程。
