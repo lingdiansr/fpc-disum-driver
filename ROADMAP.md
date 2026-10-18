@@ -52,9 +52,10 @@
 |---|---|---|
 | 外层/应用消息解析 | `libfprint/drivers/fpc_disum/fpc_disum_proto.c`、`fpc_disum_proto.h` | 不访问 USB，不命名未知字段；保留第三字段和未消费字节 |
 | envelope 认证与 TLS | `libfprint/drivers/fpc_disum/fpc_disum_tls.c`、`fpc_disum_tls.h` | OpenSSL EVP/BIO；不得自己实现密码学或降级到未约定布局 |
-| USB/会话状态机与图像驱动 | `libfprint/drivers/fpc_disum/fpc_disum.c`、`fpc_disum.h` | `FpImageDevice`、`FpiSsm` 与异步传输；一条主循环管理所有权和取消 |
-| 原生验收 | `tests/test-fpc-disum-protocol.c`、`test-fpc-disum-tls.c`、`test-fpc-disum-session.c` | 执行真正的 C 实现；人工向量重建器只构造输入，不代替被测实现 |
-| 构建注册 | 根 `meson.build`、`libfprint/meson.build`、`tests/meson.build` | 只有驱动具备真实成功与失败路径后才注册目标 ID |
+| 传输边界与会话状态机 | `fpc_disum_transport.h`、`fpc_disum_session.c`、`fpc_disum_error.c` | 不依赖 `FpDevice`；一次操作恰好一个回调，调用方决定超时，超时/取消/清理按 §16 |
+| 图像驱动适配层 | `libfprint/drivers/fpc_disum/fpc_disum.c` | `FpImageDevice` 入口 + 传输/会话所有权；只把会话结果翻译成核心调用，不含协议逻辑 |
+| 原生验收 | `tests/test-fpc-disum-protocol.c`、`test-fpc-disum-tls.c`、`test-fpc-disum-session.c`、`test-fpc-disum-error.c` | 执行真正的 C 实现；人工向量重建器只构造输入，不代替被测实现 |
+| 构建注册 | 根 `meson.build`、`libfprint/meson.build`、`tests/meson.build` | 已在 M5 注册 `fpc_disum`（目录/ID/`FP_COMPONENT`/`full_name` 见「命名」表）；驱动 ID 未做真机验证前不宣称支持 |
 
 每个模块明确输入长度、缓冲所有权、未消费尾部和错误阶段。优先使用借用视图与有界缓冲，避免为每个 USB 包或应用帧进行不必要分配和复制。
 
@@ -198,15 +199,35 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 - 会话使用自己的显式状态机而非 `FpiSsm`：`fpi_ssm_new()` 需要 `FpDevice`、`FpiUsbTransfer` 需要**活的** `GUsbDevice`，两者都会把离线验收绑死在设备上；本轮判据要求“合成事件驱动真实状态机”，因此把设备相关内容收到传输边界之后（`fpc_disum_usb.c` 仍严格采用上游 GUsb/FpiUsbTransfer 惯例）。M5 的设备胶接层继续沿用上游 `FpImageDevice` 入口。
 - 事件记录只保留**未被消费**的帧（§16.1“记录并忽略”的诊断对象），避免上万条 `EVT_TLS` 数据帧灌满有界日志并挤掉真正需要诊断的事件。
 
-## M5：内置图像驱动与取消/关闭
+## M5：内置图像驱动与取消/关闭（已完成）
 
-- [ ] 将采集状态机接入 `FpImageDevice` 的 open/activate/deactivate/close 入口，用真实图像完成回调，不注册空实现。
-- [ ] 仅匹配约定的目标设备和固件；不因相近的 FPC 型号推断兼容性，不冒充现有 `fpcmoc` 驱动。
-- [ ] 任意异步阶段取消后停止输入推进，取消在途请求；已 ARM 时执行 ARM_STOP，再 ABORT、SESSION_OFF。
-- [ ] cleanup 错误不覆盖首个根因；关闭前释放 BIO/SSL、PSK、USB 和回调所有权；下一次 open 必须新建会话。
-- [ ] 区分取消、无手指超时、协议失败、TLS 失败和 USB 失败；reset/设备重现不能自动恢复认证资格。
+- [x] 将采集状态机接入 `FpImageDevice` 的 open/activate/deactivate/close 入口，用真实图像完成回调，不注册空实现。
+- [x] 仅匹配约定的目标设备和固件；不因相近的 FPC 型号推断兼容性，不冒充现有 `fpcmoc` 驱动。
+- [x] 任意异步阶段取消后停止输入推进，取消在途请求；已 ARM 时执行 ARM_STOP，再 ABORT、SESSION_OFF。
+- [x] cleanup 错误不覆盖首个根因；关闭前释放 BIO/SSL、PSK、USB 和回调所有权；下一次 open 必须新建会话。
+- [x] 区分取消、无手指超时、协议失败、TLS 失败和 USB 失败；reset/设备重现不能自动恢复认证资格。
 
 **完成判据**：在所有挂起点取消、失败后 close/reopen、重复关闭等生命周期用例不泄漏、不悬空回调、不重复完成动作；完成真实路径后才加入 Meson 驱动表和设备 ID。不得将通用上层录入 API 的存在解释为本传感器录入生命周期已验证。
+
+**本轮实际验收**：
+
+| 项 | 结果 |
+|---|---|
+| `test-fpc-disum-session` | 23 个用例。本轮新增：在 §6 的**每个挂起点**逐个取消（`0x08`/`GET_STATE`/`CMD_INIT`/换句柄/`GET_TLS_KEY`/`TLS_INIT`）；`ARM`、`GET_IMG` 在途时取消（清理是否含 `ARM_STOP` 随"ARM 是否已被接受"变化）；取图阶段取消；失败后 close 再新建会话；重复 close |
+| `test-fpc-disum-error` | 状态→错误映射（取消／窗口到期／USB 失败／协议与安全失败／编程错误各自成类）、会话文本透传、每个失败都有非空且合法的文本 |
+| 四个配置 | `llvm`／`sanitizers`（ASan+UBSan）／`gcc` 三个虚拟驱动配置与新增 `device` 配置（含本驱动）：`cleanroom` 4/4、原生 9/9 全部通过 |
+| 变异 | 去掉触摸通知、清理无条件发 `ARM_STOP`、close 一律报成功、把窗口到期映射成通用错误：四者分别使对应用例失败 |
+| 静态分析 | `clang-tidy` 目标（`llvm` 与 `device` 两套，覆盖驱动文件）无启用规则诊断；`clang-format` 干净 |
+| 注册落点 | 根 `meson.build` 的 `drivers_info['fpc_disum'] = { 'helper': ['openssl'] }`；`libfprint/meson.build` 的 `driver_sources['fpc_disum']` 与 `libfpc_disum` 链接；生成的 `fpi-drivers.c` 调用 `fpi_device_fpc_disum_get_type` |
+| 设备匹配 | `id_table` 只有 `10a5:9201`；`usb_discover` 仅接受 `bcdDevice=0x0250` 并给相近版本 0 分（不推断兼容性） |
+
+实现要点：`fpc_disum.c` 是 `FpImageDevice` 适配层——`img_open` 建立**新**会话并在 §6+§8 完成后报告；`activate` 就绪即完成，取图由 `change_state(AWAIT_FINGER_ON)` 启动；设备报触摸时上报"手指在场"，取到图像后上报图像与"手指离开"；`deactivate` 取消在途采集并在其完成回调里完成动作；`img_close` 先取消再走 §16.3 清理，随后释放 TLS 通道、PSK、传输，重复 close 由状态守卫拦住。取消路径明确：open 阶段由动作 cancellable 直接驱动（图像设备核心不会为 open 发 `deactivate`），采集阶段由核心的 `deactivate` 驱动。错误映射集中在 `fpc_disum_error.c`。
+
+**未验证与范围（诚实记录，不得读作已验证）**：
+- 适配层与核心的交互（真正的 `FpImageDevice` 生命周期）**无法在本源码树离线驱动**：上游没有可注入的假 `GUsbDevice`，umockdev 回放也承载不了交互式 TLS 握手（握手字节依赖主机随机数，无法复现）。本轮离线验收覆盖**会话层**（含全部挂起点取消、清理、close/reopen、重复 close），适配层由代码评审与 M6 真机覆盖，不记作"已离线验证"。
+- `bz3_threshold` 采用框架默认（40）：规格未给出阈值依据，留给 M6 真机评估。
+- 主机侧录入按 §16.4 指引由上层重复调用已验证的采集模式实现（框架默认 5 段）；**未在真机验证**，不得宣称录入生命周期已验证。
+- 三个开发配置继续只编译虚拟驱动；新增的 `device` 配置才会编译本驱动，任何会枚举设备的命令在该配置下都可能认领真实传感器，因此它只用于编译与不枚举设备的用例。
 
 ## M6：受控真机验收与交付
 

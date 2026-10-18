@@ -50,12 +50,15 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M4 已完成；驱动注册与 `FpImageDevice` 胶接（M5）尚未实现**；仍未注册 `fpc_disum` 或 `10a5:9201`，没有任何采图实现。
+- **当前状态：M0–M5 已完成**：驱动已实现并注册 `fpc_disum` / `10a5:9201`（`bcdDevice=0x0250`）；**尚未在真机上验证**——受控硬件验收（M6）需另行授权。未在硬件上运行过之前，不宣称设备可用。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_session.c`（单次会话状态机）：§6 初始化序列与 `CMD_INIT` 后换句柄、§8 握手、§4.5 `ARM`→触摸→`GET_IMG`→取图、§16 失败/取消/清理。它只通过 `fpc_disum_transport.h` 的传输边界访问设备，因此可在没有硬件的情况下被合成事件完整验收。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_usb.c`：该边界的 GUsb/FpiUsbTransfer 实现（vendor 控制 OUT/IN、0x82 bulk 读、`CMD_INIT` 后的关句柄/重开/重新 claim、先读当前配置以避免冗余 `SET_CONFIGURATION`）。该文件目前只做静态验证：三套构建下编译通过，设备侧行为需 M6 授权实验。
+- 已实现 `libfprint/drivers/fpc_disum/fpc_disum.c`：`FpImageDevice` 适配层（`img_open`/`img_close`/`activate`/`deactivate`/`change_state`）。open 建新会话并跑 §6+§8，取图完成时用真实图像回调上报，close 走 §16.3 清理并释放密码学与传输资源；`usb_discover` 只接受约定固件版本。
+- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_error.c`：会话结果→libfprint 错误映射，取消／窗口到期／USB 失败／协议与安全失败各自成类（规格 §16.2/§16.3 要求可区分）。
+- 该适配层与核心的交互**无法离线驱动**（上游没有可注入的假 `GUsbDevice`，umockdev 回放承载不了交互式 TLS 握手）：离线验收覆盖会话层与错误映射，适配层由评审 + M6 真机覆盖，详见 ROADMAP M5 的"未验证与范围"。
 - 上游框架及其他型号驱动不是本传感器的协议来源；原有公开录制测试数据不作为本项目的净室验收输入。
 - Git 本地开发分支为 `main`，上游 remote 为 `upstream`。不自动提交本侧修改，也不执行 push。
 - 本侧对上游的必要构建修正：`tests/meson.build` 的无 GI 分支使用键、值双变量遍历驱动字典，以支持固定版本 Meson 的 C-only 配置；未改变测试行为。
@@ -70,14 +73,15 @@ sha256sum -c docs/SHA256SUMS
 | LLVM | `common.ini` + `llvm.ini` | `_build/llvm` | Clang/LLD、clangd 编译数据库、静态分析 |
 | 严格 sanitizer | `common.ini` + `llvm.ini` + `sanitizers.ini` | `_build/sanitizers` | ASan + 全量 UBSan，首个 UBSan 错误即失败 |
 | GCC | `common.ini` + `gcc.ini` | `_build/gcc` | GNU C99/GCC/BFD 兼容构建 |
+| 含本驱动 | `common.ini` + `device.ini` | `_build/device` | 编译并链接 `fpc_disum`（供 M6 真机使用）；会枚举设备的命令在此配置下可能认领真实传感器 |
 
-上述文件位于 `dev/native/`。公共配置只编译三个虚拟驱动，关闭可选 GI/文档/安装测试及 udev 生成，安装前缀固定在本地 `_build/stage`，不替换系统 libfprint/fprintd。
+上述文件位于 `dev/native/`。三个开发配置只编译虚拟驱动（隔离要求），`device.ini` 额外把它加入驱动集。全部关闭可选 GI/文档/安装测试及 udev 生成，安装前缀固定在本地 `_build/stage`，不替换系统 libfprint/fprintd。
 
 需要 Clang/Clang++、LLD、clang-tidy、GCC/G++、Ninja、pkg-config、GLib ≥2.68、GUsb ≥0.2、OpenSSL ≥3.0；clangd 用于编辑器导航。sanitizer 配置还需要匹配的 Clang runtime。Python ≥3.11 用于基线检查，`uv` 用于运行固定版本 Meson。sccache 可选，不是质量门禁依赖。
 
 本机缺少 `g-ir-scanner`，因此这些 C-only 配置不生成 GI 语言绑定；C 库及原生测试仍启用。如需 GI 绑定，先安装对应开发工具，再显式配置 `-Dintrospection=true`，不要把缺少可选工具改成假成功。
 
-### 配置三套构建
+### 配置构建（三个开发配置 + 一个含驱动的配置）
 
 ```sh
 python3 tools/check-cleanroom.py
@@ -91,6 +95,10 @@ uv tool run --from meson==1.12.1 meson setup _build/sanitizers \
 
 uv tool run --from meson==1.12.1 meson setup _build/gcc \
   --native-file dev/native/common.ini --native-file dev/native/gcc.ini
+
+# 只用于编译本驱动与不枚举设备的用例；会枚举设备的命令可能认领真实传感器。
+uv tool run --from meson==1.12.1 meson setup _build/device \
+  --native-file dev/native/common.ini --native-file dev/native/device.ini
 ```
 
 编译器在首次配置时固定；不要在同一构建目录内切换编译器或混用插桩产物。旧 `_build/dev` 和早期诊断目录不是以上配置的别名，不再作为本文开发入口。
@@ -104,9 +112,19 @@ for profile in llvm sanitizers gcc; do
     --suite cleanroom --print-errorlogs || exit $?
   uv tool run --from meson==1.12.1 meson test -C "_build/$profile" \
     fpc-disum-protocol fpc-disum-tls fpc-disum-channel fpc-disum-session \
+    fpc-disum-error \
     fpi-device fpi-ssm fp-context fp-device \
     --print-errorlogs || exit $?
 done
+```
+
+含驱动的配置只编译与跑不枚举设备的用例（编译即验证驱动与注册，跑用例验证同一批离线断言）：
+
+```sh
+uv tool run --from meson==1.12.1 meson compile -C _build/device
+uv tool run --from meson==1.12.1 meson test -C _build/device --suite cleanroom
+uv tool run --from meson==1.12.1 meson test -C _build/device \
+  fpc-disum-protocol fpc-disum-tls fpc-disum-channel fpc-disum-session fpc-disum-error
 ```
 
 `tools/check-cleanroom.py` 同时核对**源码中固定的已复核哈希**、本地清单及实际文件；只改写 `docs/SHA256SUMS` 不能将未经复核的规格变成有效输入。Meson 配置和 `cleanroom` 测试组均执行该检查。
@@ -115,7 +133,7 @@ done
 
 sanitizer 测试默认使用 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`；保留 `address,undefined` 检查，不使用 `-fno-sanitize` 或 suppression 隐藏诊断。`b_lundef=false` 仅用于 ASan 共享库链接，运行时仍由最终测试可执行文件提供 sanitizer runtime。
 
-原生验收限于状态机、设备动作、协议解析和虚拟上下文，不运行读取上游录制指纹图像的 assembling/capture 用例。不要将虚拟驱动或解析器测试通过解释为 FPC 设备采图已通过。
+原生验收限于状态机、会话生命周期、错误映射、协议解析和虚拟上下文，不运行读取上游录制指纹图像的 assembling/capture 用例。`FpImageDevice` 适配层与真实设备**都未离线覆盖**：不要将虚拟驱动或解析器测试通过解释为 FPC 设备采图已通过。
 
 ### 定向静态分析与编辑器
 
