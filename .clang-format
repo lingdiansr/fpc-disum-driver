@@ -1,0 +1,16 @@
+# Mirrors the GNU/GLib style that scripts/uncrustify.cfg enforces for libfprint.
+# uncrustify remains the project's authoritative formatter; this file only keeps
+# editors and auto-format hooks from rewriting new files into a foreign style.
+BasedOnStyle: GNU
+IndentWidth: 2
+ContinuationIndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: GNU
+SpaceBeforeParens: Always
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AlignAfterOpenBracket: DontAlign
+BinPackArguments: true
+BinPackParameters: true
+PointerAlignment: Right
+SortIncludes: false

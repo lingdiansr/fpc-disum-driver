@@ -1,0 +1,5 @@
+libfprint/drivers/virtual-image.c
+tests/test-fpi-device.c
+tests/test-fpi-ssm.c
+libfprint/drivers/fpc_disum/**/*.c
+tests/test-fpc-disum-*.c

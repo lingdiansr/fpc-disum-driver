@@ -1,0 +1,4 @@
+Checks: '-*,clang-analyzer-core.*,clang-analyzer-unix.*,bugprone-sizeof-expression,bugprone-suspicious-memset-usage'
+WarningsAsErrors: 'clang-analyzer-*,bugprone-*'
+HeaderFilterRegex: '.*'
+FormatStyle: 'none'

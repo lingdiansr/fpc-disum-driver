@@ -13,6 +13,12 @@ gnome = import('gnome')
 
 python3 = find_program('python3')
 
+# The device protocol must remain bound to the reviewed cleanroom input.
+cleanroom_check = files('tools/check-cleanroom.py')
+fpc_disum_vector_tool = files('tools/fpc_disum_vectors.py')
+run_command(python3, cleanroom_check, check: true)
+run_command(python3, fpc_disum_vector_tool, check: true)
+
 libfprint_conf = configuration_data()
 libfprint_conf.set_quoted('LIBFPRINT_VERSION', meson.project_version())
 

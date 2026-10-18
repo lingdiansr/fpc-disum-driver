@@ -301,6 +301,27 @@ libfprint_private_dep = declare_dependency(
     ]
 )
 
+# Envelope authentication and the later TLS-PSK channel use OpenSSL 3 (SPEC §8).
+fpc_disum_crypto_dep = dependency('openssl', version: '>= 3.0')
+
+# Driver-local protocol parsing and security channel for the FPC Disum sensor
+# (10a5:9201). They are kept as their own module so the native tests can exercise
+# them without a device, and so the image driver added later only contains the
+# device glue.
+libfpc_disum = static_library('fpc-disum',
+    sources: files(
+        'drivers/fpc_disum/fpc_disum_proto.c',
+        'drivers/fpc_disum/fpc_disum_tls.c',
+    ),
+    dependencies: deps + [fpc_disum_crypto_dep],
+    install: false)
+
+fpc_disum_dep = declare_dependency(
+    include_directories: include_directories('drivers/fpc_disum'),
+    link_with: libfpc_disum,
+    dependencies: deps + [fpc_disum_crypto_dep],
+)
+
 udev_hwdb_list = 'fprint-list-udev-hwdb.c'
 udev_hwdb_list_file = files(udev_hwdb_list)
 udev_hwdb = executable('fprint-list-udev-hwdb',

@@ -1,3 +1,26 @@
+test('cleanroom-baseline',
+    python3,
+    args: cleanroom_check,
+    suite: ['cleanroom'],
+)
+test('cleanroom-baseline-regressions',
+    python3,
+    args: files('test-cleanroom-baseline.py'),
+    suite: ['cleanroom'],
+)
+test('cleanroom-vectors',
+    python3,
+    args: [fpc_disum_vector_tool, '--vectors',
+           meson.project_source_root() / 'docs' / 'CLEANROOM_TEST_VECTORS.json',
+           '--verify'],
+    suite: ['cleanroom'],
+)
+test('cleanroom-vector-regressions',
+    python3,
+    args: files('test-cleanroom-vectors.py'),
+    suite: ['cleanroom'],
+)
+
 envs = environment()
 # Enable debug messages and abort on warnings
 envs.set('G_DEBUG', 'fatal-warnings')
@@ -292,13 +315,53 @@ else
         args: ['-c', 'exit 77']
     )
 
-    foreach driver_test: drivers_tests
+    foreach driver_test, args: drivers_tests
         test(driver_test,
             sh,
             args: ['-c', 'exit 77']
         )
     endforeach
 endif
+
+# The FPC Disum protocol corpus is regenerated from the reviewed vectors; the native
+# test executes the real parser against those reconstructed reads.
+fpc_disum_corpus = custom_target('fpc-disum-corpus',
+    input: meson.project_source_root() / 'docs' / 'CLEANROOM_TEST_VECTORS.json',
+    output: ['fpc-disum-corpus.h', 'fpc-disum-corpus.c'],
+    command: [
+        python3, fpc_disum_vector_tool,
+        '--vectors', '@INPUT@',
+        '--emit-corpus', '@OUTDIR@',
+    ],
+)
+
+fpc_disum_protocol_test = executable('test-fpc-disum-protocol',
+    sources: ['test-fpc-disum-protocol.c', fpc_disum_corpus],
+    dependencies: fpc_disum_dep,
+    include_directories: include_directories('.'),
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-protocol',
+    fpc_disum_protocol_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
+fpc_disum_tls_test = executable('test-fpc-disum-tls',
+    sources: ['test-fpc-disum-tls.c', fpc_disum_corpus],
+    dependencies: fpc_disum_dep,
+    include_directories: include_directories('.'),
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-tls',
+    fpc_disum_tls_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
 
 test_utils = static_library('fprint-test-utils',
     sources: [
@@ -423,6 +486,7 @@ if ('address' in libfprint_sanitizers or
         timeout_multiplier: 3,
         env: [
             'ASAN_OPTIONS=verify_asan_link_order=0',
+            'UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1',
         ])
 endif
 
