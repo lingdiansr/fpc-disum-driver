@@ -1,0 +1,566 @@
+{
+ "device": {
+  "bcdDevice": "0x0250",
+  "pid": "0x9201",
+  "vid": "0x10a5"
+ },
+ "notes": [
+  "Every byte in this file is regenerated from the declarative description with it;",
+  "no captured data, key, envelope, PSK or fingerprint image from any device is used.",
+  "Expectations were computed by running the reference implementation in this repository.",
+  "A passing pixel vector is a spatial-structure screen only, not proof of a fingerprint.",
+  "reject_stage (when present) names the first failing envelope check; vectors without it only require rejection."
+ ],
+ "patterns": {
+  "counter": "bytes i mod 256 for i in 0..length-1",
+  "horizontal_ramp": "112x88, byte(x*step mod 256)",
+  "inner_header_image": "12-byte header given as hex, followed by the pattern named in 'image'",
+  "literal": "bytes given as hex",
+  "noise": "random.Random(seed).randbytes(112*88)",
+  "ridge": "112x88, 128 + 60*sin(2*pi*x/period + 0.9*sin(2*pi*y/30)) + 25*sin(2*pi*y/17), clamped to 0..255",
+  "vertical_ramp": "112x88, byte(y*step mod 256)",
+  "zeros": "112*88 zero bytes"
+ },
+ "spec_version": "reviewed-2026-10-17-r2",
+ "synthetic": true,
+ "vectors": [
+  {
+   "chunks": [
+    64,
+    48
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 5,
+      "payload_len": 100,
+      "payload_sha256": "bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52",
+      "total_len": 112,
+      "unknown": 2864434397
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 5,
+     "payload": {
+      "kind": "counter",
+      "length": 100
+     },
+     "unknown": 2864434397
+    }
+   ],
+   "id": "outer-frame/split-across-64b-packets",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    27
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 1,
+      "payload_len": 1,
+      "payload_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+      "total_len": 13,
+      "unknown": 2
+     },
+     {
+      "code": 3,
+      "payload_len": 2,
+      "payload_sha256": "1e0bbd6c686ba050b8eb03ffeedc64fdc9d80947fce821abbe5d6dc8d252c5ac",
+      "total_len": 14,
+      "unknown": 4
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 1,
+     "payload": {
+      "hex": "61",
+      "kind": "literal"
+     },
+     "unknown": 2
+    },
+    {
+     "code": 3,
+     "payload": {
+      "hex": "6263",
+      "kind": "literal"
+     },
+     "unknown": 4
+    }
+   ],
+   "id": "outer-frame/two-frames-in-one-packet",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    10,
+    0,
+    6
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 9,
+      "payload_len": 4,
+      "payload_sha256": "0c62f876ef1dea830de9f32c2f4b46dd6d74d50d15896e09ef5a2fcd4ac7e1d7",
+      "total_len": 16,
+      "unknown": 1
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 9,
+     "payload": {
+      "hex": "7461696c",
+      "kind": "literal"
+     },
+     "unknown": 1
+    }
+   ],
+   "id": "outer-frame/empty-packet-inside-frame",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    8,
+    3,
+    1
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 6,
+      "payload_len": 0,
+      "payload_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "total_len": 12,
+      "unknown": 0
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 6,
+     "payload": {
+      "hex": "",
+      "kind": "literal"
+     },
+     "unknown": 0
+    }
+   ],
+   "id": "outer-frame/short-packets-reassemble",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    6,
+    "timeout",
+    13
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 7,
+      "payload_len": 7,
+      "payload_sha256": "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
+      "total_len": 19,
+      "unknown": 8
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 2
+   },
+   "frames": [
+    {
+     "code": 7,
+     "payload": {
+      "hex": "7061796c6f6164",
+      "kind": "literal"
+     },
+     "unknown": 8
+    }
+   ],
+   "id": "outer-frame/timeout-keeps-partial",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    12
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 6,
+      "payload_len": 0,
+      "payload_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "total_len": 12,
+      "unknown": 0
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 6,
+     "payload": {
+      "hex": "",
+      "kind": "literal"
+     },
+     "unknown": 0
+    }
+   ],
+   "id": "outer-frame/min-length-12",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    65536
+   ],
+   "clause": "§4.4",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 5,
+      "payload_len": 65524,
+      "payload_sha256": "3c414eacf9063cc5c723060c2aca26ce9540a3d38c8b879048f9418339e31e05",
+      "total_len": 65536,
+      "unknown": 0
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 5,
+     "payload": {
+      "kind": "counter",
+      "length": 65524
+     },
+     "unknown": 0
+    }
+   ],
+   "id": "outer-frame/max-length-65536",
+   "kind": "event_stream"
+  },
+  {
+   "chunks": [
+    8
+   ],
+   "clause": "§16.1",
+   "expect": {
+    "error": "ProtocolError: invalid event length 11",
+    "frames": [],
+    "held_partial_bytes": 8,
+    "timeouts": 0
+   },
+   "id": "outer-frame/length-11-rejected",
+   "kind": "event_stream",
+   "raw": {
+    "hex": "000000010000000b",
+    "kind": "literal"
+   }
+  },
+  {
+   "chunks": [
+    8
+   ],
+   "clause": "§16.1",
+   "expect": {
+    "error": "ProtocolError: invalid event length 65537",
+    "frames": [],
+    "held_partial_bytes": 8,
+    "timeouts": 0
+   },
+   "id": "outer-frame/length-65537-rejected",
+   "kind": "event_stream",
+   "raw": {
+    "hex": "0000000100010001",
+    "kind": "literal"
+   }
+  },
+  {
+   "chunks": [
+    16
+   ],
+   "clause": "§16.1",
+   "expect": {
+    "error": null,
+    "frames": [
+     {
+      "code": 119,
+      "payload_len": 4,
+      "payload_sha256": "5f78c33274e43fa9de5659265c1d917e25c03722dcb0b8d27db8d5feaa813953",
+      "total_len": 16,
+      "unknown": 4660
+     }
+    ],
+    "held_partial_bytes": 0,
+    "timeouts": 1
+   },
+   "frames": [
+    {
+     "code": 119,
+     "payload": {
+      "hex": "deadbeef",
+      "kind": "literal"
+     },
+     "unknown": 4660
+    }
+   ],
+   "id": "outer-frame/unknown-code-nonzero-third",
+   "kind": "event_stream"
+  },
+  {
+   "clause": "§5",
+   "expect": {
+    "consumed_after_first_feed": 9880,
+    "error": null,
+    "messages": [
+     {
+      "code": 8,
+      "payload_len": 9868,
+      "total_len": 9880
+     }
+    ],
+    "pending_after_first_feed": 0
+   },
+   "feeds": [
+    9880
+   ],
+   "id": "application-message/image-frame",
+   "inner": {
+    "header_hex": "00002f110000000000000000",
+    "image": {
+     "kind": "ridge",
+     "period": 9.0
+    },
+    "kind": "inner_header_image"
+   },
+   "kind": "application_stream",
+   "layout": {
+    "inner_header_hex": "00002f110000000000000000",
+    "outer_header_hex": "000000080000269800000000",
+    "pixel_offset": 24,
+    "pixels": 9856,
+    "stride": 112
+   },
+   "outer_code": 8,
+   "outer_unknown": 0
+  },
+  {
+   "clause": "§16.1",
+   "expect": {
+    "consumed_after_first_feed": 0,
+    "error": null,
+    "messages": [
+     {
+      "code": 8,
+      "payload_len": 10,
+      "total_len": 22
+     }
+    ],
+    "pending_after_first_feed": 9
+   },
+   "feeds": [
+    9,
+    100
+   ],
+   "id": "application-message/partial-held-until-complete",
+   "inner": {
+    "hex": "78787878787878787878",
+    "kind": "literal"
+   },
+   "kind": "application_stream",
+   "outer_code": 8,
+   "outer_unknown": 0
+  },
+  {
+   "clause": "§5/§15.5",
+   "expect": {
+    "accepted": true,
+    "column_difference": 0.0,
+    "horizontal_correlation": 0.901,
+    "row_difference": 9.432,
+    "vertical_correlation": 1.0
+   },
+   "id": "pixels/horizontal-ramp-accepted",
+   "kind": "pixels",
+   "pixels": {
+    "kind": "horizontal_ramp",
+    "step": 5
+   }
+  },
+  {
+   "clause": "§5/§15.5",
+   "expect": {
+    "accepted": true,
+    "column_difference": 12.563,
+    "horizontal_correlation": 1.0,
+    "row_difference": 0.0,
+    "vertical_correlation": 0.868
+   },
+   "id": "pixels/vertical-ramp-accepted",
+   "kind": "pixels",
+   "pixels": {
+    "kind": "vertical_ramp",
+    "step": 7
+   }
+  },
+  {
+   "clause": "§5",
+   "expect": {
+    "accepted": true,
+    "column_difference": 7.061,
+    "horizontal_correlation": 0.801,
+    "row_difference": 26.033,
+    "vertical_correlation": 0.983
+   },
+   "id": "pixels/ridge-accepted",
+   "kind": "pixels",
+   "pixels": {
+    "kind": "ridge",
+    "period": 9.0
+   }
+  },
+  {
+   "clause": "§15.5",
+   "expect": {
+    "accepted": false,
+    "column_difference": 85.032,
+    "horizontal_correlation": 0.008,
+    "row_difference": 85.022,
+    "vertical_correlation": 0.004
+   },
+   "id": "pixels/noise-rejected",
+   "kind": "pixels",
+   "pixels": {
+    "kind": "noise",
+    "seed": 24301
+   }
+  },
+  {
+   "clause": "§15.5",
+   "expect": {
+    "accepted": false,
+    "column_difference": 0.0,
+    "horizontal_correlation": 0.0,
+    "row_difference": 0.0,
+    "vertical_correlation": 0.0
+   },
+   "id": "pixels/zeros-rejected",
+   "kind": "pixels",
+   "pixels": {
+    "kind": "zeros"
+   }
+  },
+  {
+   "clause": "§8",
+   "derivation": {
+    "aes": "AES-256-CBC",
+    "hmac": "SHA-256, 32 B compared",
+    "hmac_key": "SHA-256 of the NUL-terminated ASCII string \"FPC_HMAC_KEY\" (13 bytes incl. the terminating NUL)",
+    "hmac_range": "aad bytes || encrypted key bytes",
+    "iv": "00000000000000000000000000000000",
+    "sealing_key": "SHA-256 of the NUL-terminated ASCII string \"FPC_SEALING_KEY\" (16 bytes incl. the terminating NUL)"
+   },
+   "envelope": {
+    "hex": "ed0dec0d1c000000200000004c0000000d00000059000000200000005b14fab6dc9182492a084f59c6b6bdef3a79712a640475d9d397772d7684885200000000000000000000000000000000000102030405060708090a0b0ce68422120e158ab212aa6eb57def30742bedf1065c50de2ee63321c2f45ccc96",
+    "kind": "literal"
+   },
+   "expect": {
+    "aad_length": 13,
+    "aad_offset": 76,
+    "key_length": 32,
+    "key_offset": 28,
+    "psk_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "signature_length": 32,
+    "signature_offset": 89
+   },
+   "id": "tls-envelope/121-valid",
+   "kind": "tls_envelope"
+  },
+  {
+   "clause": "§8/§16.2",
+   "envelope": {
+    "hex": "ed0dec0d1c000000200000004c0000000d000000590000001c0000005b14fab6dc9182492a084f59c6b6bdef3a79712a640475d9d397772d76848852000000000000000000000000",
+    "kind": "literal"
+   },
+   "expect": {
+    "detail": "TLS envelope aad range is outside 72 bytes",
+    "error": "ProtocolError"
+   },
+   "id": "tls-envelope/length-72-rejected",
+   "kind": "tls_envelope"
+  },
+  {
+   "clause": "§16.2",
+   "envelope": {
+    "hex": "ed0dec0d1c000000200000004c0000000d00000059000000200000005b14fab6dc9182492a084f59c6b6bdef3b79712a640475d9d397772d7684885200000000000000000000000000000000000102030405060708090a0b0ce68422120e158ab212aa6eb57def30742bedf1065c50de2ee63321c2f45ccc96",
+    "kind": "literal"
+   },
+   "expect": {
+    "detail": "TLS envelope HMAC verification failed",
+    "error": "ProtocolError",
+    "reject_stage": "hmac"
+   },
+   "id": "tls-envelope/bad-hmac-rejected",
+   "kind": "tls_envelope"
+  },
+  {
+   "clause": "§16.2",
+   "envelope": {
+    "hex": "ed0dec0d28000000200000004c0000000d00000059000000200000005b14fab6dc9182492a084f59c6b6bdef3a79712a640475d9d397772d7684885200000000000000000000000000000000000102030405060708090a0b0ce68422120e158ab212aa6eb57def30742bedf1065c50de2ee63321c2f45ccc96",
+    "kind": "literal"
+   },
+   "expect": {
+    "detail": "TLS envelope HMAC verification failed",
+    "error": "ProtocolError",
+    "reject_stage": "hmac"
+   },
+   "id": "tls-envelope/hardcoded-key-offset-rejected",
+   "kind": "tls_envelope"
+  },
+  {
+   "clause": "§8/§16.2",
+   "envelope": {
+    "hex": "ed0dec0d1c000000200000004c0000000d0000005f000000200000005b14fab6dc9182492a084f59c6b6bdef3a79712a640475d9d397772d7684885200000000000000000000000000000000000102030405060708090a0b0ce68422120e158ab212aa6eb57def30742bedf1065c50de2ee63321c2f45ccc96",
+    "kind": "literal"
+   },
+   "expect": {
+    "detail": "TLS envelope signature range is outside 121 bytes",
+    "error": "ProtocolError",
+    "reject_stage": "field-bounds"
+   },
+   "id": "tls-envelope/signature-offset-out-of-range-rejected",
+   "kind": "tls_envelope"
+  }
+ ]
+}
