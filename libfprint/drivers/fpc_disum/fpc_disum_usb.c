@@ -16,6 +16,7 @@
 #include <gio/gio.h>
 #include <gusb.h>
 
+#include "fpi-log.h"
 #include "fpi-usb-transfer.h"
 
 /* SPEC §1/§3.2: the only data endpoint is 0x82 IN BULK, maxPacketSize 64. */
@@ -63,10 +64,29 @@ typedef enum
   FPC_DISUM_USB_OP_REOPEN,
 } FpcDisumUsbOpKind;
 
+static const gchar *
+op_kind_name (guint kind)
+{
+  switch (kind)
+    {
+    case FPC_DISUM_USB_OP_CONTROL_OUT:
+      return "control out";
+    case FPC_DISUM_USB_OP_CONTROL_IN:
+      return "control in";
+    case FPC_DISUM_USB_OP_BULK_READ:
+      return "bulk read";
+    case FPC_DISUM_USB_OP_REOPEN:
+      return "reopen";
+    }
+
+  return "unknown";
+}
+
 /* One operation; at most one is in flight at a time. */
 struct _FpcDisumUsbOp
 {
   FpcDisumUsbPrivate *priv;
+  guint8 request;
   FpcDisumTransport *transport;
   FpcDisumUsbOpKind kind;
   FpcDisumTransportDoneFunc done;
@@ -176,6 +196,11 @@ transfer_done_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data
 
   (void)device;
 
+  /* Keep the underlying reason: the caller only sees the transport status
+   * (SPEC §16.2 asks for the original error stage and errno). */
+  if (error != NULL && status != FPC_DISUM_TRANSPORT_ERROR_CANCELLED)
+    fp_dbg ("op %u request 0x%02x failed: %s", op->kind, op->request, error->message);
+
   switch (op->kind)
     {
     case FPC_DISUM_USB_OP_CONTROL_OUT:
@@ -251,6 +276,8 @@ op_start (FpcDisumUsbOp *op)
 static void
 start_transfer (FpcDisumUsbOp *op, FpiUsbTransfer *transfer, guint timeout_ms)
 {
+  fp_dbg ("op %s request 0x%02x (timeout %u ms)", op_kind_name (op->kind), op->request, timeout_ms);
+
   /* fpi_usb_transfer_submit() steals the transfer and calls the callback
    * exactly once, unref'ing the transfer afterwards. */
   fpi_usb_transfer_submit (
@@ -271,6 +298,7 @@ fpc_disum_usb_control_out (FpcDisumTransport *transport, guint8 request, guint16
   g_return_if_fail (len == 0 || data != NULL);
 
   op = op_new (transport, FPC_DISUM_USB_OP_CONTROL_OUT);
+  op->request = request;
   op->done = done;
   op->user_data = user_data;
 
@@ -297,6 +325,7 @@ fpc_disum_usb_control_in (FpcDisumTransport *transport, guint8 request, guint16 
   g_return_if_fail (done != NULL);
 
   op = op_new (transport, FPC_DISUM_USB_OP_CONTROL_IN);
+  op->request = request;
   op->data_done = done;
   op->user_data = user_data;
 
@@ -322,6 +351,7 @@ fpc_disum_usb_bulk_read (
   g_return_if_fail (done != NULL);
 
   op = op_new (transport, FPC_DISUM_USB_OP_BULK_READ);
+  op->request = FPC_DISUM_USB_BULK_IN_EP;
   op->data_done = done;
   op->user_data = user_data;
 
@@ -363,27 +393,31 @@ reopen_configure (FpcDisumUsbOp *op)
   GUsbDevice *usb = fpi_device_get_usb_device (op->priv->device);
   GError *error = NULL;
   gint current;
-  gint target;
 
+  /*
+   * SPEC §16.2: a redundant standard configuration request is forbidden -- it
+   * makes bulk IN fail with EIO and can force a re-enumeration.  The device has a
+   * single configuration (SPEC §1), which is already selected, so it is only read
+   * and recorded here.
+   */
   current = g_usb_device_get_configuration (usb, &error);
   if (current < 0)
     {
-      g_clear_error (&error);
-      return FPC_DISUM_TRANSPORT_ERROR_IO;
-    }
-
-  target = g_usb_device_get_configuration_index (usb);
-  if (current != target && !g_usb_device_set_configuration (usb, target, &error))
-    {
+      fp_dbg ("reading the current configuration failed: %s",
+          error != NULL ? error->message : "no error reported");
       g_clear_error (&error);
       return FPC_DISUM_TRANSPORT_ERROR_IO;
     }
 
   if (!g_usb_device_claim_interface (usb, FPC_DISUM_USB_INTERFACE, 0, &error))
     {
+      fp_dbg ("claiming interface %d failed: %s", FPC_DISUM_USB_INTERFACE,
+          error != NULL ? error->message : "no error reported");
       g_clear_error (&error);
       return FPC_DISUM_TRANSPORT_ERROR_IO;
     }
+
+  fp_dbg ("reopened: configuration %d, interface %d claimed", current, FPC_DISUM_USB_INTERFACE);
 
   return FPC_DISUM_TRANSPORT_OK;
 }
@@ -405,6 +439,8 @@ reopen_poll (FpcDisumUsbOp *op)
 
       if (!g_usb_device_open (usb, &error))
         {
+          fp_dbg ("reopening the device failed: %s",
+              error != NULL ? error->message : "no error reported");
           g_clear_error (&error);
           /* SPEC §6 step 4: retry while the device is not visible again, up to
            * the deadline, with a short cancellable backoff. */
@@ -421,6 +457,19 @@ reopen_poll (FpcDisumUsbOp *op)
   op_complete (op, reopen_configure (op), NULL, 0);
 }
 
+/*
+ * SPEC §6 step 4: after CMD_INIT the old handle is dead and the device has to be
+ * opened again, re-claimed and its reader rebuilt.
+ *
+ * Hardware evidence (2026-10-18, first M6 run): closing the core's handle and
+ * opening the same GUsbDevice object again does NOT give a usable handle -- the
+ * whole device drops off the bus, the kernel gives it a new address, and every
+ * later transfer fails with EIO/ENODEV until it re-enumerates.  The reviewed
+ * specification describes exactly that symptom as the result of a host-side
+ * wrong action (SPEC §16.4).  So the swap must not touch the core's device
+ * object: the transport needs its own freshly found handle (and its own I/O
+ * path), which is the rework this comment marks.
+ */
 static void
 fpc_disum_usb_reopen (
     FpcDisumTransport *transport, FpcDisumTransportDoneFunc done, gpointer user_data)

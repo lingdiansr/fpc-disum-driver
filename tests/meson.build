@@ -391,6 +391,18 @@ test('fpc-disum-session',
     env: envs,
 )
 
+# Manual hardware probe: it opens the real sensor and is never registered as a
+# test or run automatically.  It only exists where the driver is built in.
+if 'fpc_disum' in drivers
+    executable('fpc-disum-hw-probe',
+        files('../tools/fpc_disum_hw_probe.c'),
+        dependencies: [libfprint_dep, gio_dep, glib_dep],
+        include_directories: [include_directories('.'), include_directories('../libfprint')],
+        c_args: common_cflags,
+        install: false,
+    )
+endif
+
 fpc_disum_error_test = executable('test-fpc-disum-error',
     sources: ['test-fpc-disum-error.c'],
     dependencies: [fpc_disum_dep, libfprint_dep],

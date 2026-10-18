@@ -50,7 +50,7 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M5 已完成**：驱动已实现并注册 `fpc_disum` / `10a5:9201`（`bcdDevice=0x0250`）；**尚未在真机上验证**——受控硬件验收（M6）需另行授权。未在硬件上运行过之前，不宣称设备可用。
+- **当前状态：M0–M5 已完成；M6 首次真机验收未通过**：驱动已实现并注册 `fpc_disum` / `10a5:9201`，真机上能被匹配和枚举，但 `open` 在 §6 换句柄处失败（两个缺陷：已修一个、待重写一个，见 ROADMAP M6「首次真机运行记录」）。**在修复并通过 M6 全部条目之前，不得宣称设备可用。**
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
@@ -58,6 +58,7 @@ sha256sum -c docs/SHA256SUMS
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_usb.c`：该边界的 GUsb/FpiUsbTransfer 实现（vendor 控制 OUT/IN、0x82 bulk 读、`CMD_INIT` 后的关句柄/重开/重新 claim、先读当前配置以避免冗余 `SET_CONFIGURATION`）。该文件目前只做静态验证：三套构建下编译通过，设备侧行为需 M6 授权实验。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum.c`：`FpImageDevice` 适配层（`img_open`/`img_close`/`activate`/`deactivate`/`change_state`）。open 建新会话并跑 §6+§8，取图完成时用真实图像回调上报，close 走 §16.3 清理并释放密码学与传输资源；`usb_discover` 只接受约定固件版本。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_error.c`：会话结果→libfprint 错误映射，取消／窗口到期／USB 失败／协议与安全失败各自成类（规格 §16.2/§16.3 要求可区分）。
+- 真机运行工具：`tools/fpc_disum_hw_probe.c`（仅在手选驱动集时编译；从不注册为测试），负责枚举、无手指负例、单次采图、取消、取消后再开与 close/reopen；日志按 0700/0600 存放，只输出非敏感摘要。
 - 该适配层与核心的交互**无法离线驱动**（上游没有可注入的假 `GUsbDevice`，umockdev 回放承载不了交互式 TLS 握手）：离线验收覆盖会话层与错误映射，适配层由评审 + M6 真机覆盖，详见 ROADMAP M5 的"未验证与范围"。
 - 上游框架及其他型号驱动不是本传感器的协议来源；原有公开录制测试数据不作为本项目的净室验收输入。
 - Git 本地开发分支为 `main`，上游 remote 为 `upstream`。不自动提交本侧修改，也不执行 push。
