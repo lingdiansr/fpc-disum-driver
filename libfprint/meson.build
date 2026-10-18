@@ -139,6 +139,7 @@ driver_sources = {
     'focaltech_moc' : files('drivers/focaltech_moc/focaltech_moc.c'),
     'mafpmoc' : files('drivers/mafpmoc/mafpmoc.c'),
     'secugen' : files('drivers/secugen.c'),
+    'fpc_disum' : files('drivers/fpc_disum/fpc_disum.c'),
 }
 
 helper_sources = {
@@ -241,6 +242,29 @@ libnbis = static_library('nbis',
     ]),
     install: false)
 
+# Envelope authentication and the later TLS-PSK channel use OpenSSL 3 (SPEC §8).
+fpc_disum_crypto_dep = dependency('openssl', version: '>= 3.0')
+
+# The FPC Disum driver modules (10a5:9201).  They are kept as their own static
+# library so the native tests can exercise the protocol, the security channel and
+# the session without a device, while the driver table only needs the glue.
+libfpc_disum = static_library('fpc-disum',
+    sources: files(
+        'drivers/fpc_disum/fpc_disum_proto.c',
+        'drivers/fpc_disum/fpc_disum_tls.c',
+        'drivers/fpc_disum/fpc_disum_session.c',
+        'drivers/fpc_disum/fpc_disum_usb.c',
+        'drivers/fpc_disum/fpc_disum_error.c',
+    ),
+    dependencies: deps + [fpc_disum_crypto_dep],
+    install: false)
+
+fpc_disum_dep = declare_dependency(
+    include_directories: include_directories('drivers/fpc_disum'),
+    link_with: libfpc_disum,
+    dependencies: deps + [fpc_disum_crypto_dep],
+)
+
 libfprint_private = static_library('fprint-private',
     sources: [
         fpi_enums,
@@ -254,7 +278,7 @@ libfprint_drivers = static_library('fprint-drivers',
     sources: drivers_sources,
     c_args: drivers_cflags,
     dependencies: deps,
-    link_with: libfprint_private,
+    link_with: [libfprint_private, libfpc_disum],
     install: false)
 
 mapfile = files('libfprint.ver')[0]
@@ -274,7 +298,7 @@ libfprint = shared_library(versioned_libname.split('lib')[1],
     version: libversion,
     link_args : vflag,
     link_depends : mapfile,
-    link_with: [libfprint_drivers, libfprint_private],
+    link_with: [libfprint_drivers, libfprint_private, libfpc_disum],
     dependencies: deps,
     install: true)
 
@@ -299,29 +323,6 @@ libfprint_private_dep = declare_dependency(
         deps,
         libfprint_dep,
     ]
-)
-
-# Envelope authentication and the later TLS-PSK channel use OpenSSL 3 (SPEC §8).
-fpc_disum_crypto_dep = dependency('openssl', version: '>= 3.0')
-
-# Driver-local protocol parsing and security channel for the FPC Disum sensor
-# (10a5:9201). They are kept as their own module so the native tests can exercise
-# them without a device, and so the image driver added later only contains the
-# device glue.
-libfpc_disum = static_library('fpc-disum',
-    sources: files(
-        'drivers/fpc_disum/fpc_disum_proto.c',
-        'drivers/fpc_disum/fpc_disum_tls.c',
-        'drivers/fpc_disum/fpc_disum_session.c',
-        'drivers/fpc_disum/fpc_disum_usb.c',
-    ),
-    dependencies: deps + [fpc_disum_crypto_dep],
-    install: false)
-
-fpc_disum_dep = declare_dependency(
-    include_directories: include_directories('drivers/fpc_disum'),
-    link_with: libfpc_disum,
-    dependencies: deps + [fpc_disum_crypto_dep],
 )
 
 udev_hwdb_list = 'fprint-list-udev-hwdb.c'

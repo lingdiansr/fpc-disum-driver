@@ -114,6 +114,9 @@ struct _FpcDisumSession
   gpointer done_data;
   FpcDisumSessionCaptureFunc capture_done;
 
+  FpcDisumTouchFunc touch_handler;
+  gpointer touch_data;
+
   gpointer timeout_handle;
 
   FpcDisumTls *tls;
@@ -611,6 +614,10 @@ on_event_frame (const FpcDisumFrame *frame, gpointer user_data)
         {
           self->state = ST_CAPTURE_GET_IMG;
           used = TRUE;
+
+          /* The caller learns about the touch before GET_IMG goes out. */
+          if (self->touch_handler != NULL)
+            self->touch_handler (self->touch_data);
         }
       break;
     case EVT_ARM_RESULT:
@@ -878,6 +885,17 @@ fpc_disum_session_set_timeouts (
     self->reopen_ms = reopen_ms;
   if (capture_window_ms > 0)
     self->window_ms = capture_window_ms;
+}
+
+void
+fpc_disum_session_set_touch_handler (
+    FpcDisumSession *self, FpcDisumTouchFunc handler, gpointer user_data)
+{
+  g_return_if_fail (self != NULL);
+  g_return_if_fail (self->state == ST_NONE);
+
+  self->touch_handler = handler;
+  self->touch_data = user_data;
 }
 
 void

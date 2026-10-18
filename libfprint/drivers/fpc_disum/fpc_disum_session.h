@@ -118,6 +118,16 @@ void fpc_disum_session_set_timeouts (
     FpcDisumSession *session, guint handshake_ms, guint reopen_ms, guint capture_window_ms);
 
 /*
+ * Called once while a capture waits, when the device reports the touch that makes
+ * the session send GET_IMG.  The image-device layer uses it to report the finger
+ * as present at the moment the device saw it; a second touch in the same capture
+ * is not reported again.
+ */
+typedef void (*FpcDisumTouchFunc) (gpointer user_data);
+void fpc_disum_session_set_touch_handler (
+    FpcDisumSession *session, FpcDisumTouchFunc handler, gpointer user_data);
+
+/*
  * SPEC §6 + §8: 0x08, GET_STATE, CMD_INIT, the handle swap, GET_TLS_KEY with
  * envelope authentication, TLS_INIT and the PSK handshake.  On success the session
  * holds an established channel; EVT_INIT_RESULT is recorded but never gates this.
