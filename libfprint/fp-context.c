@@ -275,7 +275,15 @@ usb_device_removed_cb (FpContext *self, GUsbDevice *device, GUsbContext *usb_ctx
         continue;
 
       if (fpi_device_get_usb_device (dev) == device)
-        fpi_device_remove (dev);
+        {
+          /* A device that resets itself leaves the bus without being removed;
+           * drivers announce that window.  Only a departure nobody expects is a
+           * real removal. */
+          if (fpi_device_usb_is_reenumeration_expected (dev))
+            continue;
+
+          fpi_device_remove (dev);
+        }
     }
 }
 

@@ -187,6 +187,8 @@ op_free (FpcDisumUsbOp *op)
  * before the callee runs, so a callback may start the next operation.  The
  * callback is suppressed once the transport has been freed.
  */
+static void set_reenumeration_expected (FpcDisumUsbPrivate *priv, gboolean expected);
+
 static void
 op_complete (FpcDisumUsbOp *op, FpcDisumTransportStatus status, const guint8 *data, gsize len)
 {
@@ -194,6 +196,14 @@ op_complete (FpcDisumUsbOp *op, FpcDisumTransportStatus status, const guint8 *da
 
   if (priv->in_flight == op)
     priv->in_flight = NULL;
+
+  /* Whatever the outcome, the device is no longer expected to be absent once the
+   * reconnect operation is over (SPEC §6 step 4). */
+  if (op->kind == FPC_DISUM_USB_OP_REOPEN)
+    {
+      set_reenumeration_expected (priv, FALSE);
+      fp_dbg ("re-enumeration expectation released");
+    }
 
   if (op->cancelled && status == FPC_DISUM_TRANSPORT_OK)
     status = FPC_DISUM_TRANSPORT_ERROR_CANCELLED;
@@ -402,6 +412,26 @@ fpc_disum_usb_bulk_read (
 }
 
 static void reopen_poll (FpcDisumUsbOp *op);
+
+/*
+ * SPEC §6 step 4: CMD_INIT makes the device leave the bus and come back with a
+ * new address.  That departure is the driver's own doing, so the core is told to
+ * expect it -- otherwise the core marks the device removed and rewrites the
+ * result of every later action (SPEC §16.2 requires a fresh re-initialisation on
+ * every open, so this happens on every session).
+ */
+static void
+set_reenumeration_expected (FpcDisumUsbPrivate *priv, gboolean expected)
+{
+  if (priv->device != NULL)
+    fpi_device_usb_set_reenumeration_expected (priv->device, expected);
+}
+
+static void
+fpc_disum_usb_reenumeration_expected (FpcDisumTransport *transport, gboolean expected)
+{
+  set_reenumeration_expected (transport_priv (transport), expected);
+}
 
 static void
 reopen_timeout_cb (FpDevice *device, gpointer user_data)
@@ -698,6 +728,7 @@ fpc_disum_usb_transport_new (FpDevice *device)
   self->parent.control_in = fpc_disum_usb_control_in;
   self->parent.bulk_read = fpc_disum_usb_bulk_read;
   self->parent.reopen = fpc_disum_usb_reopen;
+  self->parent.reenumeration_expected = fpc_disum_usb_reenumeration_expected;
   self->parent.cancel = fpc_disum_usb_cancel;
   self->priv = priv;
 
@@ -720,6 +751,10 @@ fpc_disum_usb_transport_free (FpcDisumTransport *transport)
    * cancelled and its completion suppressed through torn_down, while a pending
    * reopen retry is stopped directly (no transfer will call back for it). */
   priv->torn_down = TRUE;
+
+  /* A stale expectation would hide a real removal, so the device is no longer
+   * considered absent once the driver lets go of it. */
+  set_reenumeration_expected (priv, FALSE);
 
   if (priv->in_flight != NULL)
     {

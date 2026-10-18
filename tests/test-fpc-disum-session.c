@@ -166,6 +166,9 @@ typedef struct
   gsize finger_down_end; /* stream offset just past the touch frame, 0 if none */
   gboolean needs_reopen;
   gboolean reopened;
+  gboolean expects_reenumeration; /* set by the session around CMD_INIT */
+  gboolean expect_seen_before_init;
+  gboolean reopen_in_flight;
   gboolean armed;
   gboolean finger_down_seen;
   gboolean stale_handle_used;
@@ -434,6 +437,24 @@ fake_send_image (FakeDevice *dev)
 
 /* ------------------------------------------------------------ transport impl */
 
+/* The session announces the device's self-inflicted absence (SPEC §6 step 4);
+ * the fake only records it and lets the reopen paths release it, like the USB
+ * transport does. */
+static void
+fake_reenumeration_expected (FpcDisumTransport *transport, gboolean expected)
+{
+  FakeDevice *dev = (FakeDevice *)transport;
+
+  dev->expects_reenumeration = expected;
+}
+
+static void
+fake_release_expectation (FakeDevice *dev)
+{
+  if (dev->expects_reenumeration)
+    fake_reenumeration_expected ((FpcDisumTransport *)dev, FALSE);
+}
+
 static void
 fake_control_out (FpcDisumTransport *transport, guint8 request, guint16 value, const guint8 *data,
     gsize len, FpcDisumTransportDoneFunc done, gpointer user_data)
@@ -459,6 +480,8 @@ fake_control_out (FpcDisumTransport *transport, guint8 request, guint16 value, c
     case CMD_SESSION_OFF:
       break;
     case CMD_INIT:
+      /* The post-reset absence has to be announced before the command goes out. */
+      dev->expect_seen_before_init = dev->expects_reenumeration;
       dev->needs_reopen = TRUE;
       break;
     case CMD_ARM:
@@ -509,6 +532,8 @@ fake_control_out (FpcDisumTransport *transport, guint8 request, guint16 value, c
       return;
     }
 
+  dev->reopen_in_flight = FALSE;
+  fake_release_expectation (dev);
   done (transport, FPC_DISUM_TRANSPORT_OK, user_data);
 }
 
@@ -621,9 +646,12 @@ fake_reopen (FpcDisumTransport *transport, FpcDisumTransportDoneFunc done, gpoin
   FakeDevice *dev = (FakeDevice *)transport;
 
   fake_log (dev, "REOPEN");
+  dev->reopen_in_flight = TRUE;
 
   if (dev->fail_reopen)
     {
+      dev->reopen_in_flight = FALSE;
+      fake_release_expectation (dev);
       done (transport, FPC_DISUM_TRANSPORT_ERROR_IO, user_data);
       return;
     }
@@ -656,6 +684,13 @@ fake_cancel (FpcDisumTransport *transport)
 
       dev->held_done = NULL;
       dev->held_user_data = NULL;
+
+      if (dev->reopen_in_flight)
+        {
+          dev->reopen_in_flight = FALSE;
+          fake_release_expectation (dev);
+        }
+
       done (transport, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, user_data);
       return;
     }
@@ -712,6 +747,7 @@ fake_device_new (const FpcDisumCorpusEnvelopeVector *vector)
   dev->transport.control_in = fake_control_in;
   dev->transport.bulk_read = fake_bulk_read;
   dev->transport.reopen = fake_reopen;
+  dev->transport.reenumeration_expected = fake_reenumeration_expected;
   dev->transport.cancel = fake_cancel;
 
   dev->timer.pending = g_ptr_array_new ();
@@ -1021,6 +1057,39 @@ test_init_reopen_failure (void)
 
   fixture_close (&fixture);
   g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_ERROR_IO);
+
+  fixture_teardown (&fixture);
+}
+
+static void
+test_reenumeration_expectation (void)
+{
+  Fixture fixture;
+
+  fixture_setup (&fixture);
+  fixture_init_ok (&fixture);
+
+  /* The absence is announced before CMD_INIT, and the transport releases it when
+   * the reconnect finishes (SPEC §6 step 4). */
+  g_assert_true (fixture.dev->expect_seen_before_init);
+  g_assert_false (fixture.dev->expects_reenumeration);
+
+  fixture_teardown (&fixture);
+}
+
+static void
+test_reenumeration_expectation_released_on_failure (void)
+{
+  Fixture fixture;
+
+  fixture_setup (&fixture);
+  fixture.dev->fail_reopen = TRUE;
+
+  fpc_disum_session_init_async (fixture.session, fixture_init_done, &fixture);
+
+  g_assert_cmpint (fixture.init_status, ==, FPC_DISUM_SESSION_ERROR_IO);
+  g_assert_true (fixture.dev->expect_seen_before_init);
+  g_assert_false (fixture.dev->expects_reenumeration);
 
   fixture_teardown (&fixture);
 }
@@ -1651,6 +1720,9 @@ main (int argc, char **argv)
   g_test_add_func ("/session/init-handshake-timeout", test_init_handshake_timeout);
   g_test_add_func ("/session/init-envelope-rejected", test_init_envelope_rejected);
   g_test_add_func ("/session/init-reopen-failure", test_init_reopen_failure);
+  g_test_add_func ("/session/reenumeration-expectation", test_reenumeration_expectation);
+  g_test_add_func ("/session/reenumeration-expectation-released-on-failure",
+      test_reenumeration_expectation_released_on_failure);
   g_test_add_func ("/session/init-tls-identity-rejected", test_init_tls_identity_rejected);
   g_test_add_func ("/session/capture-command-order", test_capture_command_order);
   g_test_add_func ("/session/capture-requires-touch", test_capture_requires_touch);

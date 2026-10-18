@@ -60,6 +60,15 @@ struct _FpcDisumTransport
   void (*control_in) (FpcDisumTransport *transport, guint8 request, guint16 value, gsize requested,
       FpcDisumTransportDataFunc done, gpointer user_data);
   /*
+   * Declare that the device is expected to leave the bus and come back on its
+   * own: CMD_INIT resets it and makes it re-enumerate with a new address
+   * (SPEC §6 step 4).  A USB implementation passes that on to the core so the
+   * self-inflicted departure is not mistaken for a removal; the expectation is
+   * released when the reconnect finishes and when the transport is torn down, so
+   * the session only has to raise it before the command.
+   */
+  void (*reenumeration_expected) (FpcDisumTransport *transport, gboolean expected);
+  /*
    * One bulk IN read from EP 0x82.  A read may return any length up to the endpoint
    * packet size, and neither that length nor a short packet carries frame meaning
    * (SPEC §3.2/§4.4); a read that returns no bytes at all is reported as

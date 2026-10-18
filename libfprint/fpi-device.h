@@ -261,6 +261,16 @@ GCancellable *fpi_device_get_cancellable (FpDevice *device);
 
 void fpi_device_remove (FpDevice *device);
 
+/*
+ * A USB device that is expected to disappear from the bus and come back by
+ * itself (e.g. a sensor that resets on a vendor command and re-enumerates with a
+ * new address) must not be reported as removed while that is happening.  The
+ * driver raises this expectation around that window and clears it once the
+ * device is usable again; fp-context.c consults it in its removal callback.
+ */
+void fpi_device_usb_set_reenumeration_expected (FpDevice *device, gboolean expected);
+gboolean fpi_device_usb_is_reenumeration_expected (FpDevice *device);
+
 GSource * fpi_device_add_timeout (FpDevice      *device,
                                   gint           interval,
                                   FpTimeoutFunc  func,

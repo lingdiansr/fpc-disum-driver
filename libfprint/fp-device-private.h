@@ -52,6 +52,10 @@ typedef struct
   } udev_data;
 
   gboolean        is_removed;
+  /* Set while the driver expects the device to leave the bus and come back by
+   * itself, so that is not reported as a removal (see
+   * fpi_device_usb_set_reenumeration_expected()). */
+  gboolean        usb_reenumeration_expected;
   gboolean        is_open;
   gboolean        is_suspended;
 

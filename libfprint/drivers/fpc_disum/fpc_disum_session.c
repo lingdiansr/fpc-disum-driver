@@ -696,6 +696,10 @@ run_state (FpcDisumSession *self)
         /* The reviewed default payload is four zero bytes (SPEC §3.1). */
         static const guint8 payload[INIT_PAYLOAD_LEN] = { 0 };
 
+        /* CMD_INIT makes the device leave the bus and come back (SPEC §6 step 4),
+         * so the transport is told to expect that before the command goes out;
+         * it releases the expectation when the reconnect finishes. */
+        self->transport->reenumeration_expected (self->transport, TRUE);
         control_out (self, CMD_INIT, INIT_VALUE, payload, sizeof payload);
       }
       break;
@@ -823,6 +827,7 @@ fpc_disum_session_new (FpcDisumTransport *transport)
   g_return_val_if_fail (transport->control_in != NULL, NULL);
   g_return_val_if_fail (transport->bulk_read != NULL, NULL);
   g_return_val_if_fail (transport->reopen != NULL, NULL);
+  g_return_val_if_fail (transport->reenumeration_expected != NULL, NULL);
   g_return_val_if_fail (transport->cancel != NULL, NULL);
 
   self = g_new0 (FpcDisumSession, 1);

@@ -337,15 +337,25 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 `the handshake made no progress`。修复：上界改为跟随 `FPC_DISUM_TLS_DATA_MAX`（同一常量，不会再漂移），并更正
 `fpc_disum_transport.h` 的契约注释。**该边界离线不可覆盖**（假传输没有这个上界），只有真机能暴露 —— 这也是首轮没走到握手的原因被掩盖的方式。
 
-**缺陷 5（未解决；非驱动缺陷，需交付形态决策）：设备自复位与核心"设备已移除"模型冲突。**
+**缺陷 5（已修 —— 交付方选择"fork 内最小核心扩展"）：设备自复位与核心"设备已移除"模型冲突。**
 `CMD_INIT` 让设备离总线后，`FpContext` 的 GUsbContext `device-removed` 信号经 `usb_device_removed_cb`（`fp-context.c:263`）
 把该 `FpDevice` 永久标记为已移除；随后 `fp_device_task_return_in_idle_cb`（`fpi-device.c:1076`，核心注释自述"除成功 open 这一 odd corner case"）
 会把**所有非 open 动作的结果强制改写成 `FP_DEVICE_ERROR_REMOVED`**。本次运行日志证据：open 成功、ARM 成功、驱动按契约报"窗口到期"，
 但上层拿到的**采集**与 **close** 结果都是 `REMOVED`（`capture: error domain=fp-device-error-quark code=256 message="This device has been removed from the system."`）。
 ⇒ 现状下**任何真实采集都无法交付给上层**（成功采集同样会被改写成 REMOVED）；而 §16.2 要求"下一次 `open` 必须新建 session 并重新初始化+TLS"，
 即**每次 open 必然复位设备**。这不是设备行为未知，也不是规格缺口：研究侧 Linux 参考工具是独立 libusb 程序，不经过 libfprint 的移除模型，所以从未遇到。
-两条路线，需交付方选择：**(A)** fork 内做一处最小、显式的核心扩展（驱动声明"预期重枚举"，移除回调据此不标记；约 30 行 + 记录上游偏离）；
-**(B)** 按 README 允许的第二形态改为独立守护进程（复用会话/TLS/解析层，绕开框架移除模型）。
+交付方选择 **(A)**，实现如下（本次提交）：
+
+- 核心新增 `fpi_device_usb_set_reenumeration_expected()` / `fpi_device_usb_is_reenumeration_expected()`（标志存于 `FpDevicePrivate`）；
+  `fp-context.c` 的 `usb_device_removed_cb` 见到该标志时**不**调用 `fpi_device_remove()` —— 只有"没人预期的离场"才算移除。
+- 传输接口新增 `reenumeration_expected`：会话在发出 `CMD_INIT` **之前**置位；USB 传输在重连操作结束（成功/失败/取消）以及传输销毁时释放
+  （陈旧标志会掩盖真实拔出，故销毁时也要清）。
+- 永久用例：`/session/reenumeration-expectation`（置位必须早于 `CMD_INIT`、重连后必须已释放）与
+  `/session/reenumeration-expectation-released-on-failure`（重连失败同样必须释放）。
+- **上游偏离记录**：本 fork 从此不只"新增一个驱动"，还自带一处核心扩展，涉及上游文件
+  `fp-context.c`、`fpi-device.[ch]`、`fp-device-private.h`。语义边界：窗口内若设备真被拔掉，驱动会以"会话失败"如实上报，
+  而不会被报成"设备已移除"（`spec` 未规定此情形，属工程约定）。
+- 未选择 **(B)** 独立守护进程形态（README 允许）：那会失去 fprintd/PAM 集成并作废 M1–M6 的框架整合工作。
 
 ## 开发规则
 

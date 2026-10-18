@@ -766,6 +766,26 @@ emit_removed_on_task_completed (FpDevice *device)
  * For USB devices, this API is called automatically by #FpContext.
  */
 void
+fpi_device_usb_set_reenumeration_expected (FpDevice *device, gboolean expected)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+
+  g_return_if_fail (FP_IS_DEVICE (device));
+
+  priv->usb_reenumeration_expected = expected != FALSE;
+}
+
+gboolean
+fpi_device_usb_is_reenumeration_expected (FpDevice *device)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+
+  g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
+
+  return priv->usb_reenumeration_expected;
+}
+
+void
 fpi_device_remove (FpDevice *device)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
