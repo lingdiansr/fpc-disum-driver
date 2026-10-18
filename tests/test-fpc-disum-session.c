@@ -181,11 +181,53 @@ typedef struct
   GQueue *arm_events;           /* delivered on ARM, just before the finger-down event */
   GQueue *img_events;           /* delivered on GET_IMG, just before the image */
 
-  /* Outgoing framed bytes and the read held while the device stays silent. */
+  /* Outgoing framed bytes. */
   GByteArray *out;
-  FpcDisumTransportDataFunc held_read;
-  gpointer held_read_data;
+
+  /* The operation the device keeps in flight, so a test can cancel a chosen
+   * suspension point instead of letting it complete. */
+  guint hold_counter;
+  guint hold_at;       /* 1-based operation index to hold; 0 = never */
+  guint8 hold_request; /* command id to hold once; 0 = never */
+  FpcDisumTransportDoneFunc held_done;
+  FpcDisumTransportDataFunc held_data_done;
+  gpointer held_user_data;
 } FakeDevice;
+
+/* Keep the operation when it was chosen (by index or by request), otherwise let
+ * it complete.  Each knob holds a single operation, so a cleanup command with the
+ * same id is never held. */
+static gboolean
+fake_should_hold (FakeDevice *dev, guint8 request)
+{
+  if (dev->hold_request != 0 && dev->hold_request == request)
+    {
+      dev->hold_request = 0;
+      return TRUE;
+    }
+
+  if (dev->hold_at != 0 && ++dev->hold_counter == dev->hold_at)
+    {
+      dev->hold_at = 0;
+      return TRUE;
+    }
+
+  return FALSE;
+}
+
+static void
+fake_hold_control (FakeDevice *dev, FpcDisumTransportDoneFunc done, gpointer user_data)
+{
+  dev->held_done = done;
+  dev->held_user_data = user_data;
+}
+
+static void
+fake_hold_data (FakeDevice *dev, FpcDisumTransportDataFunc done, gpointer user_data)
+{
+  dev->held_data_done = done;
+  dev->held_user_data = user_data;
+}
 
 static void fake_log (FakeDevice *dev, const gchar *format, ...) G_GNUC_PRINTF (2, 3);
 
@@ -461,6 +503,12 @@ fake_control_out (FpcDisumTransport *transport, guint8 request, guint16 value, c
       break;
     }
 
+  if (fake_should_hold (dev, request))
+    {
+      fake_hold_control (dev, done, user_data);
+      return;
+    }
+
   done (transport, FPC_DISUM_TRANSPORT_OK, user_data);
 }
 
@@ -484,6 +532,11 @@ fake_control_in (FpcDisumTransport *transport, guint8 request, guint16 value, gs
     {
     case CMD_GET_STATE:
       g_assert_cmpuint (requested, ==, GET_STATE_CAPACITY);
+      if (fake_should_hold (dev, request))
+        {
+          fake_hold_data (dev, done, user_data);
+          return;
+        }
       done (transport, FPC_DISUM_TRANSPORT_OK, state, sizeof state, user_data);
       break;
     case CMD_GET_TLS_KEY:
@@ -497,6 +550,11 @@ fake_control_in (FpcDisumTransport *transport, guint8 request, guint16 value, gs
           envelope[FPC_DISUM_ENVELOPE_LEN - 1] ^= 0xff;
 
         fake_flush_events (dev, dev->pre_handshake_events);
+        if (fake_should_hold (dev, request))
+          {
+            fake_hold_data (dev, done, user_data);
+            return;
+          }
         done (transport, FPC_DISUM_TRANSPORT_OK, envelope, sizeof envelope, user_data);
       }
       break;
@@ -533,8 +591,7 @@ fake_bulk_read (FpcDisumTransport *transport, FpcDisumTransportDataFunc done, gp
         {
           /* The device stays silent: keep the read in flight until the caller
            * cancels it. */
-          dev->held_read = done;
-          dev->held_read_data = user_data;
+          fake_hold_data (dev, done, user_data);
           return;
         }
 
@@ -576,6 +633,14 @@ fake_reopen (FpcDisumTransport *transport, FpcDisumTransportDoneFunc done, gpoin
   fake_log (dev, "CONFIG CURRENT");
   dev->needs_reopen = FALSE;
   dev->reopened = TRUE;
+
+  /* The handle swap has no request id; only the index knob can hold it. */
+  if (fake_should_hold (dev, 0))
+    {
+      fake_hold_control (dev, done, user_data);
+      return;
+    }
+
   done (transport, FPC_DISUM_TRANSPORT_OK, user_data);
 }
 
@@ -583,17 +648,27 @@ static void
 fake_cancel (FpcDisumTransport *transport)
 {
   FakeDevice *dev = (FakeDevice *)transport;
-  FpcDisumTransportDataFunc done;
-  gpointer user_data;
 
-  if (dev->held_read == NULL)
-    return;
+  if (dev->held_done != NULL)
+    {
+      FpcDisumTransportDoneFunc done = dev->held_done;
+      gpointer user_data = dev->held_user_data;
 
-  done = dev->held_read;
-  user_data = dev->held_read_data;
-  dev->held_read = NULL;
-  dev->held_read_data = NULL;
-  done (transport, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, NULL, 0, user_data);
+      dev->held_done = NULL;
+      dev->held_user_data = NULL;
+      done (transport, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, user_data);
+      return;
+    }
+
+  if (dev->held_data_done != NULL)
+    {
+      FpcDisumTransportDataFunc done = dev->held_data_done;
+      gpointer user_data = dev->held_user_data;
+
+      dev->held_data_done = NULL;
+      dev->held_user_data = NULL;
+      done (transport, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, NULL, 0, user_data);
+    }
 }
 
 /* ------------------------------------------------------------ device set-up */
@@ -715,7 +790,16 @@ typedef struct
   guint init_calls;
   guint capture_calls;
   guint close_calls;
+  guint touch_calls;
 } Fixture;
+
+static void
+fixture_touch (gpointer user_data)
+{
+  Fixture *fixture = user_data;
+
+  fixture->touch_calls++;
+}
 
 static void
 fixture_init_done (FpcDisumSessionStatus status, const gchar *message, gpointer user_data)
@@ -766,6 +850,7 @@ fixture_setup (Fixture *fixture)
   source.remove = fake_timer_remove;
   source.context = &fixture->dev->timer;
   fpc_disum_session_set_timeout_source (fixture->session, &source);
+  fpc_disum_session_set_touch_handler (fixture->session, fixture_touch, fixture);
 }
 
 static void
@@ -986,6 +1071,8 @@ test_capture_command_order (void)
   g_assert_cmpuint (fixture.capture_calls, ==, 1);
   g_assert_false (fixture.dev->get_img_without_touch);
   assert_image (&fixture);
+  /* The touch was reported once, when the device saw it. */
+  g_assert_cmpuint (fixture.touch_calls, ==, 1);
 
   assert_log_tail (fixture.dev, capture);
 
@@ -1018,6 +1105,7 @@ test_capture_requires_touch (void)
   g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_ERROR_NO_TOUCH);
   /* GET_IMG must never be sent without the touch event (SPEC §16.1). */
   g_assert_false (log_contains (fixture.dev, "OUT 09"));
+  g_assert_cmpuint (fixture.touch_calls, ==, 0);
   g_assert_cmpuint (fixture.dev->timer.last_interval_ms, ==, FPC_DISUM_CAPTURE_WINDOW_MS);
 
   fixture_close (&fixture);
@@ -1351,6 +1439,209 @@ test_close_reports_cleanup_failure (void)
   fixture_teardown (&fixture);
 }
 
+/* ---------------------------------------------------- lifecycle test cases */
+
+/*
+ * Every operation the initialisation can be waiting on, taken one at a time:
+ * cancel there, require exactly one cancellation report and then a complete
+ * cleanup.  Indices: 1 = 0x08, 2 = GET_STATE, 3 = CMD_INIT, 4 = the handle swap,
+ * 5 = GET_TLS_KEY, 6 = TLS_INIT.
+ */
+static void
+test_cancel_at_every_init_suspension_point (void)
+{
+  static const gchar *const cleanup[] = {
+    "OUT 03 v=0000 len=0 p=",
+    "OUT 12 v=0000 len=0 p=",
+    NULL,
+  };
+
+  for (guint op = 1; op <= 6; op++)
+    {
+      Fixture fixture;
+
+      fixture_setup (&fixture);
+      fixture.dev->hold_at = op;
+
+      fpc_disum_session_init_async (fixture.session, fixture_init_done, &fixture);
+
+      g_assert_cmpuint (fixture.init_calls, ==, 0);
+      g_assert_true (fixture.dev->held_done != NULL || fixture.dev->held_data_done != NULL);
+
+      fpc_disum_session_cancel (fixture.session);
+
+      g_assert_cmpuint (fixture.init_calls, ==, 1);
+      g_assert_cmpint (fixture.init_status, ==, FPC_DISUM_SESSION_ERROR_CANCELLED);
+      g_assert_true (fpc_disum_session_is_cancelled (fixture.session));
+
+      /* Cancelling twice must not report a second time. */
+      fpc_disum_session_cancel (fixture.session);
+      g_assert_cmpuint (fixture.init_calls, ==, 1);
+
+      fixture_close (&fixture);
+      g_assert_cmpuint (fixture.close_calls, ==, 1);
+      g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_ERROR_CANCELLED);
+      /* The session was never armed, so no ARM_STOP is sent (SPEC §16.3). */
+      g_assert_false (log_contains (fixture.dev, "OUT 02"));
+      assert_log_tail (fixture.dev, cleanup);
+
+      fixture_teardown (&fixture);
+    }
+}
+
+/* Cancelling while ARM or GET_IMG is in flight: the cleanup depends on whether
+ * ARM had already been accepted (SPEC §16.3). */
+static void
+test_cancel_at_capture_suspension_points (void)
+{
+  static const guint8 requests[] = { CMD_ARM, CMD_GET_IMG };
+  static const gchar *const cleanup_armed[] = {
+    "OUT 02 v=0001 len=4 p=122f1117",
+    "OUT 03 v=0000 len=0 p=",
+    "OUT 12 v=0000 len=0 p=",
+    NULL,
+  };
+  static const gchar *const cleanup_unarmed[] = {
+    "OUT 03 v=0000 len=0 p=",
+    "OUT 12 v=0000 len=0 p=",
+    NULL,
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (requests); i++)
+    {
+      Fixture fixture;
+
+      fixture_setup (&fixture);
+      fixture_init_ok (&fixture);
+
+      fixture.dev->hold_request = requests[i];
+      fixture_capture (&fixture);
+
+      g_assert_cmpuint (fixture.capture_calls, ==, 0);
+      g_assert_true (fixture.dev->held_done != NULL || fixture.dev->held_data_done != NULL);
+
+      fpc_disum_session_cancel (fixture.session);
+
+      g_assert_cmpuint (fixture.capture_calls, ==, 1);
+      g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_ERROR_CANCELLED);
+      /* A cancelled capture never delivers an image. */
+      g_assert_cmpuint (fixture.image_len, ==, 0);
+
+      fixture_close (&fixture);
+
+      if (requests[i] == CMD_ARM)
+        assert_log_tail (fixture.dev, cleanup_unarmed);
+      else
+        assert_log_tail (fixture.dev, cleanup_armed);
+
+      fixture_teardown (&fixture);
+    }
+}
+
+/* Cancelling while the image transfer is in flight. */
+static void
+test_cancel_during_image_transfer (void)
+{
+  Fixture fixture;
+  static const gchar *const cleanup[] = {
+    "OUT 02 v=0001 len=4 p=122f1117",
+    "OUT 03 v=0000 len=0 p=",
+    "OUT 12 v=0000 len=0 p=",
+    NULL,
+  };
+
+  fixture_setup (&fixture);
+  fixture_init_ok (&fixture);
+
+  /* The touch arrives and GET_IMG goes out, but the image never completes. */
+  fixture.dev->send_image = FALSE;
+  fixture.dev->auto_fire_idle = FALSE;
+  fixture_capture (&fixture);
+
+  g_assert_true (log_contains (fixture.dev, "OUT 09"));
+  g_assert_cmpuint (fixture.capture_calls, ==, 0);
+
+  fpc_disum_session_cancel (fixture.session);
+
+  g_assert_cmpuint (fixture.capture_calls, ==, 1);
+  g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_ERROR_CANCELLED);
+
+  fixture_close (&fixture);
+  assert_log_tail (fixture.dev, cleanup);
+  fixture_teardown (&fixture);
+}
+
+static void
+second_init_done (FpcDisumSessionStatus status, const gchar *message, gpointer user_data)
+{
+  *(FpcDisumSessionStatus *)user_data = status;
+}
+
+/*
+ * A failed session is closed with the same cleanup, keeps its root cause, and a
+ * new session initialises normally afterwards (SPEC §16.3).
+ */
+static void
+test_close_after_failure_then_reopen (void)
+{
+  Fixture fixture;
+  FpcDisumSession *second;
+  FpcDisumTimeoutSource source = { 0 };
+  FpcDisumSessionStatus second_status = FPC_DISUM_SESSION_ERROR_INVALID_ARGUMENT;
+
+  fixture_setup (&fixture);
+  fixture.dev->envelope_corrupt = TRUE;
+
+  fpc_disum_session_init_async (fixture.session, fixture_init_done, &fixture);
+  g_assert_cmpint (fixture.init_status, ==, FPC_DISUM_SESSION_ERROR_ENVELOPE);
+
+  fixture_close (&fixture);
+  /* The cleanup ran and the report still carries the first root cause. */
+  g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_ERROR_ENVELOPE);
+
+  fixture.dev->envelope_corrupt = FALSE;
+  second = fpc_disum_session_new (&fixture.dev->transport);
+  g_assert_nonnull (second);
+  source.add = fake_timer_add;
+  source.remove = fake_timer_remove;
+  source.context = &fixture.dev->timer;
+  fpc_disum_session_set_timeout_source (second, &source);
+
+  fpc_disum_session_init_async (second, second_init_done, &second_status);
+  g_assert_cmpint (second_status, ==, FPC_DISUM_SESSION_OK);
+
+  fpc_disum_session_free (second);
+  fixture_teardown (&fixture);
+}
+
+/* Closing twice is harmless and still reports once per call. */
+static void
+test_close_is_repeatable (void)
+{
+  Fixture fixture;
+  static const gchar *const cleanup[] = {
+    "OUT 02 v=0001 len=4 p=122f1117",
+    "OUT 03 v=0000 len=0 p=",
+    "OUT 12 v=0000 len=0 p=",
+    NULL,
+  };
+
+  fixture_setup (&fixture);
+  fixture_init_ok (&fixture);
+  fixture_capture (&fixture);
+  g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_OK);
+
+  fixture_close (&fixture);
+  g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_OK);
+
+  fixture_close (&fixture);
+  g_assert_cmpuint (fixture.close_calls, ==, 2);
+  g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_OK);
+  assert_log_tail (fixture.dev, cleanup);
+
+  fixture_teardown (&fixture);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1378,6 +1669,14 @@ main (int argc, char **argv)
   g_test_add_func ("/session/cancel-during-init", test_cancel_during_init);
   g_test_add_func ("/session/close-keeps-first-root-cause", test_close_keeps_first_root_cause);
   g_test_add_func ("/session/close-reports-cleanup-failure", test_close_reports_cleanup_failure);
+  g_test_add_func (
+      "/session/cancel-at-every-init-suspension-point", test_cancel_at_every_init_suspension_point);
+  g_test_add_func (
+      "/session/cancel-at-capture-suspension-points", test_cancel_at_capture_suspension_points);
+  g_test_add_func ("/session/cancel-during-image-transfer", test_cancel_during_image_transfer);
+  g_test_add_func (
+      "/session/close-after-failure-then-reopen", test_close_after_failure_then_reopen);
+  g_test_add_func ("/session/close-is-repeatable", test_close_is_repeatable);
 
   return g_test_run ();
 }

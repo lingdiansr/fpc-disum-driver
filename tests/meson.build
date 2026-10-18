@@ -391,6 +391,20 @@ test('fpc-disum-session',
     env: envs,
 )
 
+fpc_disum_error_test = executable('test-fpc-disum-error',
+    sources: ['test-fpc-disum-error.c'],
+    dependencies: [fpc_disum_dep, libfprint_dep],
+    include_directories: [include_directories('.'), include_directories('../libfprint')],
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-error',
+    fpc_disum_error_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
 test_utils = static_library('fprint-test-utils',
     sources: [
         'test-utils.c',
