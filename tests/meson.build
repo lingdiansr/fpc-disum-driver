@@ -377,6 +377,20 @@ test('fpc-disum-channel',
     env: envs,
 )
 
+fpc_disum_session_test = executable('test-fpc-disum-session',
+    sources: ['test-fpc-disum-session.c', fpc_disum_corpus],
+    dependencies: fpc_disum_dep,
+    include_directories: include_directories('.'),
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-session',
+    fpc_disum_session_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
 test_utils = static_library('fprint-test-utils',
     sources: [
         'test-utils.c',
