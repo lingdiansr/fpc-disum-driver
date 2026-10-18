@@ -312,6 +312,8 @@ libfpc_disum = static_library('fpc-disum',
     sources: files(
         'drivers/fpc_disum/fpc_disum_proto.c',
         'drivers/fpc_disum/fpc_disum_tls.c',
+        'drivers/fpc_disum/fpc_disum_session.c',
+        'drivers/fpc_disum/fpc_disum_usb.c',
     ),
     dependencies: deps + [fpc_disum_crypto_dep],
     install: false)
