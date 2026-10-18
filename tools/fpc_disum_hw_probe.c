@@ -256,8 +256,11 @@ main (int argc, char **argv)
       if (!open_device (device))
         return 1;
       capture_once (device, cancel_after_ms);
+      /* The cancelled session is *supposed* to fail, and its close carries that
+       * first cause (the driver keeps it deliberately), so it must not stop the
+       * sequence -- the second session is what this mode is about. */
       if (!close_device (device))
-        return 1;
+        printf ("note: the close carried the cancelled session's first cause\n");
 
       printf ("-- second session after the cancellation --\n");
       if (!open_device (device))
@@ -275,7 +278,7 @@ main (int argc, char **argv)
         return 1;
       capture_once (device, 0);
       if (!close_device (device))
-        return 1;
+        printf ("note: the first close carried the first session's cause\n");
 
       printf ("-- second session --\n");
       if (!open_device (device))
