@@ -91,6 +91,9 @@ static ProbePhase current_phase;
 static GCancellable *current_cancellable;
 static gboolean run_cancelled;
 static guint sigint_id;
+/* Operator report, supplied non-interactively so it is never silently null. */
+static const gchar *operator_pressed;
+static const gchar *operator_held;
 
 static RoundContext *active_round;
 
@@ -696,13 +699,15 @@ build_feedback (void)
 {
   GVariantBuilder builder;
   gboolean interactive = isatty (STDIN_FILENO);
-  const gchar *pressed = NULL;
-  const gchar *held = NULL;
+  const gchar *pressed = operator_pressed;
+  const gchar *held = operator_held;
 
   if (interactive)
     {
-      pressed = ask_operator ("Did you press only after the cue?");
-      held = ask_operator ("Did you hold until the capture finished?");
+      if (pressed == NULL)
+        pressed = ask_operator ("Did you press only after the cue?");
+      if (held == NULL)
+        held = ask_operator ("Did you hold until the capture finished?");
     }
 
   /* Actual display/audio/contact times are not measured.  They stay null; an
@@ -731,7 +736,8 @@ print_usage (FILE *stream, const gchar *program)
 {
   fprintf (stream,
       "usage: %s <list|negative|capture|cancel|cancel-reopen|reopen>"
-      " [--cancel-after-ms N] [--output-dir PATH]\n",
+      " [--cancel-after-ms N] [--pressed-after-cue yes|no|unknown]"
+      " [--held-until-end yes|no|unknown] [--output-dir PATH]\n",
       program);
 }
 
@@ -887,6 +893,32 @@ main (int argc, char **argv)
               fprintf (stderr, "--cancel-after-ms must be positive\n");
               return 2;
             }
+          continue;
+        }
+
+      if (g_strcmp0 (argv[i], "--pressed-after-cue") == 0
+          || g_strcmp0 (argv[i], "--held-until-end") == 0)
+        {
+          const gchar *value;
+
+          if (i + 1 >= argc)
+            {
+              fprintf (stderr, "%s needs yes, no or unknown\n", argv[i]);
+              return 2;
+            }
+
+          value = argv[++i];
+          if (g_strcmp0 (value, "yes") != 0 && g_strcmp0 (value, "no") != 0
+              && g_strcmp0 (value, "unknown") != 0)
+            {
+              fprintf (stderr, "%s needs yes, no or unknown\n", argv[i - 1]);
+              return 2;
+            }
+
+          if (g_strcmp0 (argv[i - 1], "--pressed-after-cue") == 0)
+            operator_pressed = value;
+          else
+            operator_held = value;
           continue;
         }
 
