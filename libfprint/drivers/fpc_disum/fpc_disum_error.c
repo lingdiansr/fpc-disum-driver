@@ -40,6 +40,10 @@ default_message (FpcDisumSessionStatus status)
       return "The arm result carries the reserved state value";
     case FPC_DISUM_SESSION_ERROR_CANCELLED:
       return "Cancelled";
+    case FPC_DISUM_SESSION_ERROR_CONNECTION_CHANGED:
+      return "The connection changed after the security channel started";
+    case FPC_DISUM_SESSION_ERROR_UNSUPPORTED_RESET_RECOVERY:
+      return "unsupported-reset-recovery";
     }
 
   return "Session failed";
@@ -60,6 +64,7 @@ fpc_disum_error_from_status (FpcDisumSessionStatus status, const gchar *message)
     case FPC_DISUM_SESSION_ERROR_NO_IMAGE:
       return g_error_new_literal (G_IO_ERROR, G_IO_ERROR_TIMED_OUT, text);
     case FPC_DISUM_SESSION_ERROR_IO:
+    case FPC_DISUM_SESSION_ERROR_CONNECTION_CHANGED:
       return g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED, text);
     case FPC_DISUM_SESSION_ERROR_PROTOCOL:
     case FPC_DISUM_SESSION_ERROR_UNEXPECTED_EVENT:
@@ -69,6 +74,10 @@ fpc_disum_error_from_status (FpcDisumSessionStatus status, const gchar *message)
       return g_error_new (FP_DEVICE_ERROR, FP_DEVICE_ERROR_PROTO, "%s", text);
     case FPC_DISUM_SESSION_ERROR_INVALID_ARGUMENT:
       return g_error_new (FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL, "%s", text);
+    case FPC_DISUM_SESSION_ERROR_UNSUPPORTED_RESET_RECOVERY:
+      /* Stable logical result; never the free-form cleanup text. */
+      return g_error_new_literal (
+          FP_DEVICE_ERROR, FP_DEVICE_ERROR_NOT_SUPPORTED, "unsupported-reset-recovery");
     }
 
   return g_error_new (FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL, "%s", text);

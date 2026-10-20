@@ -22,6 +22,7 @@
 #include <math.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 #include <gmodule.h>
 
 #include "fpi-log.h"
@@ -48,14 +49,13 @@ fp_device_get_instance_private (FpDevice *self)
 {
   FpDeviceClass *dev_class = g_type_class_peek_static (FP_TYPE_DEVICE);
 
-  return G_STRUCT_MEMBER_P (self,
-                            g_type_class_get_instance_private_offset (dev_class));
+  return G_STRUCT_MEMBER_P (self, g_type_class_get_instance_private_offset (dev_class));
 }
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (GModule, g_module_close)
 
 static char *
-error_to_string (GError * error)
+error_to_string (GError *error)
 {
   g_autofree char *domain_str = NULL;
 
@@ -71,9 +71,7 @@ error_to_string (GError * error)
   else if (error->domain == G_USB_DEVICE_ERROR)
     domain_str = g_strdup_printf ("G_USB_DEVICE_ERROR_%u", error->code);
   else
-    domain_str = g_strdup_printf ("%s_%u",
-                                  g_quark_to_string (error->domain),
-                                  error->code);
+    domain_str = g_strdup_printf ("%s_%u", g_quark_to_string (error->domain), error->code);
 
   return g_strdup_printf ("[%s] %s", domain_str, error->message);
 }
@@ -88,10 +86,9 @@ error_to_string (GError * error)
  * This is used by some drivers to enable special behavior for testing
  * and development purposes.
  */
-gboolean
-  (fpi_device_emulation_mode_enabled) (FpDevice *device)
+gboolean (fpi_device_emulation_mode_enabled) (FpDevice *device)
 {
-  static gboolean (*real_fn)(FpDevice *) = NULL;
+  static gboolean (*real_fn) (FpDevice *) = NULL;
   static gsize emulation_mode = 0;
 
   if (g_once_init_enter (&emulation_mode))
@@ -106,7 +103,7 @@ gboolean
           for (size_t i = 0; i < G_N_ELEMENTS (dirs); ++i)
             {
               g_autofree char *path = NULL;
-              g_autoptr(GModule) mod = NULL;
+              g_autoptr (GModule) mod = NULL;
               gpointer sym;
 
               path = g_build_filename (dirs[i], FPI_EMULATION_HELPER_MODULE, NULL);
@@ -116,7 +113,7 @@ gboolean
               if (!g_module_symbol (mod, "fpi_device_emulation_mode_enabled", &sym))
                 continue;
 
-              real_fn = (gboolean (*)(FpDevice *)) sym;
+              real_fn = (gboolean (*) (FpDevice *))sym;
               g_steal_pointer (&mod);
               break;
             }
@@ -293,9 +290,7 @@ fpi_device_error_new (FpDeviceError error)
  * and similar calls.
  */
 GError *
-fpi_device_retry_new_msg (FpDeviceRetry device_error,
-                          const gchar  *msg,
-                          ...)
+fpi_device_retry_new_msg (FpDeviceRetry device_error, const gchar *msg, ...)
 {
   GError *error;
   va_list args;
@@ -317,9 +312,7 @@ fpi_device_retry_new_msg (FpDeviceRetry device_error,
  * and similar calls.
  */
 GError *
-fpi_device_error_new_msg (FpDeviceError device_error,
-                          const gchar  *msg,
-                          ...)
+fpi_device_error_new_msg (FpDeviceError device_error, const gchar *msg, ...)
 {
   GError *error;
   va_list args;
@@ -341,8 +334,7 @@ fpi_device_error_new_msg (FpDeviceError device_error,
  * value can simply be set in the class.
  */
 void
-fpi_device_set_nr_enroll_stages (FpDevice *device,
-                                 gint      enroll_stages)
+fpi_device_set_nr_enroll_stages (FpDevice *device, gint enroll_stages)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -363,8 +355,7 @@ fpi_device_set_nr_enroll_stages (FpDevice *device,
  * value can simply be set in the class.
  */
 void
-fpi_device_set_scan_type (FpDevice  *device,
-                          FpScanType scan_type)
+fpi_device_set_scan_type (FpDevice *device, FpScanType scan_type)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -384,9 +375,7 @@ fpi_device_set_scan_type (FpDevice  *device,
  * to runtime detect features that are supported by the device.
  */
 void
-fpi_device_update_features (FpDevice       *device,
-                            FpDeviceFeature update,
-                            FpDeviceFeature value)
+fpi_device_update_features (FpDevice *device, FpDeviceFeature update, FpDeviceFeature value)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -399,14 +388,14 @@ fpi_device_update_features (FpDevice       *device,
 
 typedef struct
 {
-  GSource   source;
+  GSource source;
   FpDevice *device;
 } FpDeviceTimeoutSource;
 
 static void
 timeout_finalize (GSource *source)
 {
-  FpDeviceTimeoutSource *timeout_source = (FpDeviceTimeoutSource *) source;
+  FpDeviceTimeoutSource *timeout_source = (FpDeviceTimeoutSource *)source;
   FpDevicePrivate *priv;
 
   priv = fp_device_get_instance_private (timeout_source->device);
@@ -416,21 +405,17 @@ timeout_finalize (GSource *source)
 static gboolean
 timeout_dispatch (GSource *source, GSourceFunc gsource_func, gpointer user_data)
 {
-  FpDeviceTimeoutSource *timeout_source = (FpDeviceTimeoutSource *) source;
-  FpTimeoutFunc callback = (FpTimeoutFunc) gsource_func;
+  FpDeviceTimeoutSource *timeout_source = (FpDeviceTimeoutSource *)source;
+  FpTimeoutFunc callback = (FpTimeoutFunc)gsource_func;
 
   callback (timeout_source->device, user_data);
 
   return G_SOURCE_REMOVE;
 }
 
-static GSourceFuncs timeout_funcs = {
-  NULL, /* prepare */
-  NULL, /* check */
-  timeout_dispatch,
-  timeout_finalize,
-  NULL, NULL
-};
+static GSourceFuncs timeout_funcs = { NULL, /* prepare */
+  NULL,                                     /* check */
+  timeout_dispatch, timeout_finalize, NULL, NULL };
 
 /**
  * fpi_device_add_timeout:
@@ -446,18 +431,14 @@ static GSourceFuncs timeout_funcs = {
  * Returns: (transfer none): A newly created and attached #GSource
  */
 GSource *
-fpi_device_add_timeout (FpDevice      *device,
-                        gint           interval,
-                        FpTimeoutFunc  func,
-                        gpointer       user_data,
-                        GDestroyNotify destroy_notify)
+fpi_device_add_timeout (FpDevice *device, gint interval, FpTimeoutFunc func, gpointer user_data,
+    GDestroyNotify destroy_notify)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpDeviceTimeoutSource *source;
   GMainContext *context;
 
-  source = (FpDeviceTimeoutSource *) g_source_new (&timeout_funcs,
-                                                   sizeof (FpDeviceTimeoutSource));
+  source = (FpDeviceTimeoutSource *)g_source_new (&timeout_funcs, sizeof (FpDeviceTimeoutSource));
   source->device = device;
 
   if (priv->current_task)
@@ -466,9 +447,9 @@ fpi_device_add_timeout (FpDevice      *device,
     context = g_main_context_get_thread_default ();
 
   g_source_attach (&source->source, context);
-  g_source_set_callback (&source->source, (GSourceFunc) func, user_data, destroy_notify);
-  g_source_set_ready_time (&source->source,
-                           g_source_get_time (&source->source) + interval * (guint64) 1000);
+  g_source_set_callback (&source->source, (GSourceFunc)func, user_data, destroy_notify);
+  g_source_set_ready_time (
+      &source->source, g_source_get_time (&source->source) + interval * (guint64)1000);
   priv->sources = g_slist_prepend (priv->sources, source);
   g_source_unref (&source->source);
 
@@ -493,6 +474,188 @@ fpi_device_get_usb_device (FpDevice *device)
   g_return_val_if_fail (priv->type == FP_DEVICE_TYPE_USB, NULL);
 
   return priv->usb_device;
+}
+
+static gboolean
+parse_hex_byte (const gchar *str, gsize len, guint8 *out)
+{
+  gint high, low;
+
+  if (len != 2)
+    return FALSE;
+
+  high = g_ascii_xdigit_value (str[0]);
+  low = g_ascii_xdigit_value (str[1]);
+  if (high < 0 || low < 0)
+    return FALSE;
+
+  *out = (guint8)((high << 4) | low);
+  return TRUE;
+}
+
+gboolean
+fpi_usb_identity_from_platform_id (const gchar *platform_id, guint8 *bus, GArray **ports)
+{
+  g_autoptr (GArray) parsed_ports = NULL;
+  const gchar *p;
+  guint8 parsed_bus = 0;
+  gboolean have_bus = FALSE;
+
+  g_return_val_if_fail (bus != NULL, FALSE);
+  g_return_val_if_fail (ports != NULL, FALSE);
+
+  *bus = 0;
+  *ports = NULL;
+
+  if (platform_id == NULL || !g_str_has_prefix (platform_id, "usb:"))
+    return FALSE;
+
+  p = platform_id + strlen ("usb:");
+  if (*p == '\0')
+    return FALSE;
+
+  parsed_ports = g_array_new (FALSE, FALSE, sizeof (guint8));
+
+  while (TRUE)
+    {
+      const gchar *end = strchr (p, ':');
+      gsize len = end ? (gsize)(end - p) : strlen (p);
+      guint8 value;
+
+      if (len == 0 || !parse_hex_byte (p, len, &value))
+        return FALSE;
+
+      if (!have_bus)
+        {
+          parsed_bus = value;
+          have_bus = TRUE;
+        }
+      else
+        {
+          g_array_append_val (parsed_ports, value);
+        }
+
+      if (end == NULL)
+        break;
+
+      p = end + 1;
+      if (*p == '\0')
+        return FALSE;
+    }
+
+  /* GUsb's Linux platform id starts with the root hub port (0) before the
+   * physical chain, while libusb_get_port_numbers() reports only the ports
+   * below the root hub.  USB port numbers are 1-based, so leading zeros can
+   * only be the root hub and are not part of the device identity. */
+  while (parsed_ports->len > 0 && g_array_index (parsed_ports, guint8, 0) == 0)
+    g_array_remove_index (parsed_ports, 0);
+
+  /* The bus alone is not a physical identity: the chain must not be empty. */
+  if (!have_bus || parsed_ports->len == 0)
+    return FALSE;
+
+  *bus = parsed_bus;
+  *ports = g_steal_pointer (&parsed_ports);
+  return TRUE;
+}
+
+gboolean
+fpi_usb_identity_from_device (GUsbDevice *usb, FpiUsbIdentity *out)
+{
+  g_autoptr (GArray) ports = NULL;
+  FpiUsbIdentity identity = { 0 };
+  const gchar *platform_id;
+  guint8 bus;
+
+  g_return_val_if_fail (G_USB_IS_DEVICE (usb), FALSE);
+  g_return_val_if_fail (out != NULL, FALSE);
+
+  memset (out, 0, sizeof (*out));
+
+  platform_id = g_usb_device_get_platform_id (usb);
+  if (!fpi_usb_identity_from_platform_id (platform_id, &bus, &ports))
+    return FALSE;
+
+  identity.platform_id = g_strdup (platform_id);
+  identity.bus = bus;
+  identity.ports = g_steal_pointer (&ports);
+  identity.vid = g_usb_device_get_vid (usb);
+  identity.pid = g_usb_device_get_pid (usb);
+  identity.release = g_usb_device_get_release (usb);
+
+  *out = identity;
+  return TRUE;
+}
+
+void
+fpi_usb_identity_clear (FpiUsbIdentity *id)
+{
+  if (id == NULL)
+    return;
+
+  g_clear_pointer (&id->platform_id, g_free);
+  g_clear_pointer (&id->ports, g_array_unref);
+  id->bus = 0;
+  id->vid = 0;
+  id->pid = 0;
+  id->release = 0;
+}
+
+static gboolean
+usb_identity_ports_equal (const FpiUsbIdentity *a, const FpiUsbIdentity *b)
+{
+  guint i;
+
+  if (a->ports == NULL || b->ports == NULL)
+    return FALSE;
+  if (a->ports->len != b->ports->len)
+    return FALSE;
+
+  for (i = 0; i < a->ports->len; i++)
+    {
+      if (g_array_index (a->ports, guint8, i) != g_array_index (b->ports, guint8, i))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+gboolean
+fpi_usb_identity_equal (const FpiUsbIdentity *a, const FpiUsbIdentity *b)
+{
+  if (a == NULL || b == NULL)
+    return FALSE;
+  if (a->platform_id == NULL || b->platform_id == NULL)
+    return FALSE;
+
+  return g_strcmp0 (a->platform_id, b->platform_id) == 0 && a->bus == b->bus && a->vid == b->vid
+         && a->pid == b->pid && a->release == b->release && usb_identity_ports_equal (a, b);
+}
+
+gboolean
+fpi_usb_identity_matches_bus_ports (const FpiUsbIdentity *id, guint8 bus, const guint8 *ports,
+    guint n_ports, guint16 vid, guint16 pid, guint16 release)
+{
+  guint i;
+
+  g_return_val_if_fail (id != NULL, FALSE);
+
+  if (id->ports == NULL)
+    return FALSE;
+  if (id->bus != bus || id->vid != vid || id->pid != pid || id->release != release)
+    return FALSE;
+  if (id->ports->len != n_ports)
+    return FALSE;
+  if (n_ports > 0 && ports == NULL)
+    return FALSE;
+
+  for (i = 0; i < n_ports; i++)
+    {
+      if (g_array_index (id->ports, guint8, i) != ports[i])
+        return FALSE;
+    }
+
+  return TRUE;
 }
 
 /**
@@ -616,8 +779,7 @@ fpi_device_get_driver_data (FpDevice *device)
  * Get data for enrollment.
  */
 void
-fpi_device_get_enroll_data (FpDevice *device,
-                            FpPrint **print)
+fpi_device_get_enroll_data (FpDevice *device, FpPrint **print)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpEnrollData *data;
@@ -640,8 +802,7 @@ fpi_device_get_enroll_data (FpDevice *device,
  * Get data for capture.
  */
 void
-fpi_device_get_capture_data (FpDevice *device,
-                             gboolean *wait_for_finger)
+fpi_device_get_capture_data (FpDevice *device, gboolean *wait_for_finger)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -660,8 +821,7 @@ fpi_device_get_capture_data (FpDevice *device,
  * Get data for verify.
  */
 void
-fpi_device_get_verify_data (FpDevice *device,
-                            FpPrint **print)
+fpi_device_get_verify_data (FpDevice *device, FpPrint **print)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data;
@@ -691,8 +851,7 @@ fpi_device_get_verify_data (FpDevice *device,
  *
  */
 void
-fpi_device_get_identify_data (FpDevice   *device,
-                              GPtrArray **prints)
+fpi_device_get_identify_data (FpDevice *device, GPtrArray **prints)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data;
@@ -715,8 +874,7 @@ fpi_device_get_identify_data (FpDevice   *device,
  * Get data for delete.
  */
 void
-fpi_device_get_delete_data (FpDevice *device,
-                            FpPrint **print)
+fpi_device_get_delete_data (FpDevice *device, FpPrint **print)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -756,23 +914,106 @@ emit_removed_on_task_completed (FpDevice *device)
   g_signal_emit_by_name (device, "removed");
 }
 
-/**
- * fpi_device_remove:
- * @device: The #FpDevice
- *
- * Called to signal to the #FpDevice that it has been unplugged (physically
- * removed from the system).
- *
- * For USB devices, this API is called automatically by #FpContext.
- */
-void
-fpi_device_usb_set_reenumeration_expected (FpDevice *device, gboolean expected)
+static void
+set_usb_transaction_error (GError **error, FpDeviceError code, const gchar *message)
+{
+  if (error != NULL && *error == NULL)
+    *error = g_error_new_literal (FP_DEVICE_ERROR, code, message);
+}
+
+static void
+take_usb_error (GError **error, GError **nested_error)
+{
+  if (*nested_error == NULL)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_GENERAL, "The core USB operation failed without an error");
+      return;
+    }
+
+  if (error != NULL)
+    *error = g_steal_pointer (nested_error);
+  else
+    g_clear_error (nested_error);
+}
+
+gboolean
+fpi_device_usb_begin_reenumeration (FpDevice *device, GError **error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
-  g_return_if_fail (FP_IS_DEVICE (device));
+  g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  priv->usb_reenumeration_expected = expected != FALSE;
+  if (priv->type != FP_DEVICE_TYPE_USB)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_NOT_SUPPORTED, "Re-enumeration is only supported on USB devices");
+      return FALSE;
+    }
+
+  if (priv->is_removed)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_REMOVED, "The device has already been removed");
+      return FALSE;
+    }
+
+  if (priv->current_action != FPI_DEVICE_ACTION_OPEN)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_BUSY, "Re-enumeration is only allowed during OPEN");
+      return FALSE;
+    }
+
+  if (priv->usb_init_stage != FPI_DEVICE_USB_INIT_NONE)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_BUSY, "A re-enumeration transaction is already active");
+      return FALSE;
+    }
+
+  if (!priv->usb_identity_valid)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_NOT_SUPPORTED, "The USB device has no usable physical identity");
+      return FALSE;
+    }
+
+  priv->usb_init_stage = FPI_DEVICE_USB_INIT_CMD_PENDING;
+  priv->usb_departure_seen = FALSE;
+  priv->usb_rebind_deadline_us = 0;
+  priv->usb_offered_generation = 0;
+  g_clear_object (&priv->usb_replacement);
+
+  return TRUE;
+}
+
+gboolean
+fpi_device_usb_allow_reenumeration (FpDevice *device, gint64 deadline_us, GError **error)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+
+  g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (priv->usb_init_stage != FPI_DEVICE_USB_INIT_CMD_PENDING)
+    {
+      set_usb_transaction_error (error, FP_DEVICE_ERROR_BUSY, "No CMD_INIT transaction is pending");
+      return FALSE;
+    }
+
+  if (deadline_us <= 0)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_GENERAL, "Re-enumeration requires an absolute deadline");
+      return FALSE;
+    }
+
+  priv->usb_init_stage = FPI_DEVICE_USB_INIT_REACQUIRE;
+  priv->usb_rebind_deadline_us = deadline_us;
+
+  return TRUE;
 }
 
 gboolean
@@ -782,9 +1023,245 @@ fpi_device_usb_is_reenumeration_expected (FpDevice *device)
 
   g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
 
-  return priv->usb_reenumeration_expected;
+  return priv->usb_init_stage != FPI_DEVICE_USB_INIT_NONE
+         && priv->current_action == FPI_DEVICE_ACTION_OPEN;
 }
 
+void
+fpi_device_usb_note_departure (FpDevice *device)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+
+  g_return_if_fail (FP_IS_DEVICE (device));
+
+  /* Only a real departure of the object that is currently bound matters. */
+  if (priv->usb_init_stage != FPI_DEVICE_USB_INIT_NONE)
+    priv->usb_departure_seen = TRUE;
+}
+
+void
+fpi_device_usb_offer_replacement (FpDevice *device, GUsbDevice *candidate)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+  FpiUsbIdentity candidate_identity = { 0 };
+  gboolean matches;
+
+  g_return_if_fail (FP_IS_DEVICE (device));
+
+  if (priv->usb_init_stage == FPI_DEVICE_USB_INIT_NONE || !priv->usb_identity_valid
+      || candidate == NULL)
+    return;
+
+  if (!fpi_usb_identity_from_device (candidate, &candidate_identity))
+    return;
+
+  matches = fpi_usb_identity_equal (&priv->usb_identity, &candidate_identity);
+  fpi_usb_identity_clear (&candidate_identity);
+
+  if (!matches)
+    return;
+
+  /* A repeated add of the very same object is not a new generation. */
+  if (candidate == priv->usb_device && !priv->usb_departure_seen)
+    return;
+
+  if (candidate == priv->usb_replacement)
+    return;
+
+  g_set_object (&priv->usb_replacement, candidate);
+  priv->usb_offered_generation = priv->usb_generation == 0 ? 1 : priv->usb_generation + 1;
+}
+
+GUsbDevice *
+fpi_device_usb_ref_reenumeration_candidate (FpDevice *device)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+
+  g_return_val_if_fail (FP_IS_DEVICE (device), NULL);
+
+  /* The candidate only exists inside an explicit reclaim transaction. */
+  if (priv->usb_init_stage == FPI_DEVICE_USB_INIT_NONE)
+    return NULL;
+
+  if (priv->usb_replacement != NULL)
+    return g_object_ref (priv->usb_replacement);
+
+  if (!priv->usb_departure_seen && priv->usb_device != NULL)
+    return g_object_ref (priv->usb_device);
+
+  return NULL;
+}
+
+gboolean
+fpi_device_usb_commit_reenumeration (
+    FpDevice *device, GUsbDevice *claimed_candidate, GError **error)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+  g_autoptr (GUsbDevice) retired = NULL;
+  g_autoptr (GError) nested_error = NULL;
+  GUsbDevice *expected;
+  gboolean was_open;
+
+  g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (priv->type != FP_DEVICE_TYPE_USB || priv->usb_init_stage != FPI_DEVICE_USB_INIT_REACQUIRE)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_NOT_SUPPORTED, "No re-enumeration transaction is ready to commit");
+      fpi_device_usb_abort_reenumeration (device);
+      return FALSE;
+    }
+
+  if (priv->usb_rebind_deadline_us <= 0 || g_get_monotonic_time () > priv->usb_rebind_deadline_us)
+    {
+      set_usb_transaction_error (
+          error, FP_DEVICE_ERROR_BUSY, "The re-enumeration deadline has expired");
+      fpi_device_usb_abort_reenumeration (device);
+      return FALSE;
+    }
+
+  expected = priv->usb_replacement != NULL ? priv->usb_replacement : priv->usb_device;
+
+  /* A departure without a known current object cannot be bound. */
+  if (expected == NULL || (priv->usb_departure_seen && priv->usb_replacement == NULL)
+      || claimed_candidate == NULL || claimed_candidate != expected
+      || !fpi_device_usb_matches (device, claimed_candidate))
+    {
+      set_usb_transaction_error (error, FP_DEVICE_ERROR_GENERAL,
+          "The claimed candidate is not the offered re-enumeration candidate");
+      fpi_device_usb_abort_reenumeration (device);
+      return FALSE;
+    }
+
+  /* Same object: only the generation bookkeeping changes.  There is no
+   * reason to close and reopen a handle that was never retired. */
+  if (claimed_candidate == priv->usb_device)
+    {
+      if (priv->usb_departure_seen)
+        {
+          /* The old handle may still be marked open even though the device
+           * left the bus; close it first, tolerating the expected states. */
+          if (priv->usb_handle_open)
+            {
+              g_usb_device_close (claimed_candidate, &nested_error);
+              g_clear_error (&nested_error);
+              priv->usb_handle_open = FALSE;
+            }
+
+          if (!g_usb_device_open (claimed_candidate, &nested_error))
+            {
+              take_usb_error (error, &nested_error);
+              fpi_device_usb_abort_reenumeration (device);
+              return FALSE;
+            }
+
+          priv->usb_handle_open = TRUE;
+        }
+
+      if (priv->usb_offered_generation != 0)
+        priv->usb_generation = priv->usb_offered_generation;
+
+      g_clear_object (&priv->usb_replacement);
+      priv->usb_init_stage = FPI_DEVICE_USB_INIT_NONE;
+      priv->usb_rebind_deadline_us = 0;
+      priv->usb_departure_seen = FALSE;
+      priv->usb_offered_generation = 0;
+      return TRUE;
+    }
+
+  /* Open the new core object first; only then swap the binding as a unit. */
+  if (!g_usb_device_open (claimed_candidate, &nested_error))
+    {
+      take_usb_error (error, &nested_error);
+      fpi_device_usb_abort_reenumeration (device);
+      return FALSE;
+    }
+
+  was_open = priv->usb_handle_open;
+  retired = g_steal_pointer (&priv->usb_device);
+  priv->usb_device = g_object_ref (claimed_candidate);
+  priv->usb_handle_open = TRUE;
+
+  if (was_open && retired != NULL)
+    {
+      if (!g_usb_device_close (retired, &nested_error)
+          && !g_error_matches (nested_error, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_NO_DEVICE)
+          && !g_error_matches (nested_error, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_NOT_OPEN))
+        {
+          /* The new binding cannot be trusted: retire it as well and let the
+           * caller observe the failure.  The transaction itself is aborted. */
+          g_usb_device_close (priv->usb_device, NULL);
+          priv->usb_handle_open = FALSE;
+          take_usb_error (error, &nested_error);
+          fpi_device_usb_abort_reenumeration (device);
+          return FALSE;
+        }
+    }
+
+  if (priv->usb_offered_generation != 0)
+    priv->usb_generation = priv->usb_offered_generation;
+
+  g_clear_object (&priv->usb_replacement);
+  priv->usb_init_stage = FPI_DEVICE_USB_INIT_NONE;
+  priv->usb_rebind_deadline_us = 0;
+  priv->usb_departure_seen = FALSE;
+  priv->usb_offered_generation = 0;
+
+  return TRUE;
+}
+
+void
+fpi_device_usb_abort_reenumeration (FpDevice *device)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+  gboolean departure_seen;
+
+  g_return_if_fail (FP_IS_DEVICE (device));
+
+  departure_seen = priv->usb_departure_seen;
+
+  priv->usb_init_stage = FPI_DEVICE_USB_INIT_NONE;
+  priv->usb_rebind_deadline_us = 0;
+  priv->usb_departure_seen = FALSE;
+  priv->usb_offered_generation = 0;
+  g_clear_object (&priv->usb_replacement);
+
+  /* Do not fabricate a removal when nothing actually left the bus. */
+  if (departure_seen && !priv->is_removed)
+    fpi_device_remove (device);
+}
+
+gboolean
+fpi_device_usb_matches (FpDevice *device, GUsbDevice *candidate)
+{
+  FpDevicePrivate *priv = fp_device_get_instance_private (device);
+  FpiUsbIdentity candidate_identity = { 0 };
+  gboolean matches;
+
+  g_return_val_if_fail (FP_IS_DEVICE (device), FALSE);
+
+  if (!priv->usb_identity_valid || candidate == NULL)
+    return FALSE;
+
+  if (!fpi_usb_identity_from_device (candidate, &candidate_identity))
+    return FALSE;
+
+  matches = fpi_usb_identity_equal (&priv->usb_identity, &candidate_identity);
+  fpi_usb_identity_clear (&candidate_identity);
+
+  return matches;
+}
+
+/**
+ * fpi_device_remove:
+ * @device: The #FpDevice
+ *
+ * Called to signal to the #FpDevice that it has been unplugged (physically
+ * removed from the system).
+ *
+ * For USB devices, this API is called automatically by #FpContext.
+ */
 void
 fpi_device_remove (FpDevice *device)
 {
@@ -801,11 +1278,8 @@ fpi_device_remove (FpDevice *device)
    * immediately emit the "removed" signal. */
   if (priv->current_task)
     {
-      g_signal_connect_object (priv->current_task,
-                               "notify::completed",
-                               (GCallback) emit_removed_on_task_completed,
-                               device,
-                               G_CONNECT_SWAPPED);
+      g_signal_connect_object (priv->current_task, "notify::completed",
+          (GCallback)emit_removed_on_task_completed, device, G_CONNECT_SWAPPED);
     }
   else
     {
@@ -824,8 +1298,7 @@ fpi_device_remove (FpDevice *device)
  * that results in improved error detection.
  */
 void
-fpi_device_action_error (FpDevice *device,
-                         GError   *error)
+fpi_device_action_error (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -837,18 +1310,19 @@ fpi_device_action_error (FpDevice *device,
       if (!g_log_writer_default_would_drop (G_LOG_LEVEL_DEBUG, G_LOG_DOMAIN))
         {
           g_autofree char *error_str = error_to_string (error);
-          g_autofree char *action_str = g_enum_to_string (FPI_TYPE_DEVICE_ACTION, priv->current_action);
+          g_autofree char *action_str
+              = g_enum_to_string (FPI_TYPE_DEVICE_ACTION, priv->current_action);
 
-          g_debug ("Device reported generic error (%s) during action; action was: %s",
-                   error_str, action_str);
+          g_debug ("Device reported generic error (%s) during action; action was: %s", error_str,
+              action_str);
         }
     }
   else
     {
       g_warning ("Device failed to pass an error to generic action error function");
-      error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "Device reported error but did not provide an error condition");
+      error = fpi_device_error_new_msg (
+          FP_DEVICE_ERROR_GENERAL, "Device reported error but did not provide an error condition");
     }
-
 
   switch (priv->current_action)
     {
@@ -946,8 +1420,8 @@ fpi_device_critical_section_flush_idle_cb (FpDevice *device)
   if (priv->cancel_queued)
     {
       /* Cancellation must only happen if the driver is busy. */
-      if (priv->current_action != FPI_DEVICE_ACTION_NONE &&
-          priv->current_task_idle_return_source == NULL)
+      if (priv->current_action != FPI_DEVICE_ACTION_NONE
+          && priv->current_task_idle_return_source == NULL)
         cls->cancel (device);
       priv->cancel_queued = FALSE;
 
@@ -1004,13 +1478,10 @@ fpi_device_critical_leave (FpDevice *device)
   priv->critical_section_flush_source = g_idle_source_new ();
   g_source_set_priority (priv->critical_section_flush_source, G_PRIORITY_HIGH);
   g_source_set_callback (priv->critical_section_flush_source,
-                         (GSourceFunc) fpi_device_critical_section_flush_idle_cb,
-                         device,
-                         NULL);
-  g_source_set_name (priv->critical_section_flush_source,
-                     "Flush libfprint driver critical section");
-  g_source_attach (priv->critical_section_flush_source,
-                   g_task_get_context (priv->current_task));
+      (GSourceFunc)fpi_device_critical_section_flush_idle_cb, device, NULL);
+  g_source_set_name (
+      priv->critical_section_flush_source, "Flush libfprint driver critical section");
+  g_source_attach (priv->critical_section_flush_source, g_task_get_context (priv->current_task));
   g_source_unref (priv->critical_section_flush_source);
 }
 
@@ -1023,20 +1494,20 @@ clear_device_cancel_action (FpDevice *device)
 
   if (priv->current_cancellable_id)
     {
-      g_cancellable_disconnect (priv->current_cancellable,
-                                priv->current_cancellable_id);
+      g_cancellable_disconnect (priv->current_cancellable, priv->current_cancellable_id);
       priv->current_cancellable_id = 0;
     }
 
   if (priv->current_task_cancellable_id)
     {
-      g_cancellable_disconnect (g_task_get_cancellable (priv->current_task),
-                                priv->current_task_cancellable_id);
+      g_cancellable_disconnect (
+          g_task_get_cancellable (priv->current_task), priv->current_task_cancellable_id);
       priv->current_task_cancellable_id = 0;
     }
 }
 
-typedef enum _FpDeviceTaskReturnType {
+typedef enum _FpDeviceTaskReturnType
+{
   FP_DEVICE_TASK_RETURN_INT,
   FP_DEVICE_TASK_RETURN_BOOL,
   FP_DEVICE_TASK_RETURN_OBJECT,
@@ -1046,16 +1517,16 @@ typedef enum _FpDeviceTaskReturnType {
 
 typedef struct _FpDeviceTaskReturnData
 {
-  FpDevice              *device;
+  FpDevice *device;
   FpDeviceTaskReturnType type;
-  gpointer               result;
+  gpointer result;
 } FpDeviceTaskReturnData;
 
 static gboolean
 fp_device_task_return_in_idle_cb (gpointer user_data)
 {
-  g_autoptr(GTask) task = NULL;
-  g_autoptr(GError) cancellation_reason = NULL;
+  g_autoptr (GTask) task = NULL;
+  g_autoptr (GError) cancellation_reason = NULL;
   FpDeviceTaskReturnData *data = user_data;
   FpDevicePrivate *priv = fp_device_get_instance_private (data->device);
   FpiDeviceAction action;
@@ -1076,8 +1547,7 @@ fp_device_task_return_in_idle_cb (gpointer user_data)
 
   fpi_device_update_temp (data->device, FALSE);
 
-  if (action == FPI_DEVICE_ACTION_OPEN &&
-      data->type != FP_DEVICE_TASK_RETURN_ERROR)
+  if (action == FPI_DEVICE_ACTION_OPEN && data->type != FP_DEVICE_TASK_RETURN_ERROR)
     {
       priv->is_open = TRUE;
       g_object_notify (G_OBJECT (data->device), "open");
@@ -1095,10 +1565,14 @@ fp_device_task_return_in_idle_cb (gpointer user_data)
 
   /* Return FP_DEVICE_ERROR_REMOVED if the device is removed,
    * with the exception of a successful open, which is an odd corner case. */
-  if (priv->is_removed &&
-      ((action != FPI_DEVICE_ACTION_OPEN) ||
-       (action == FPI_DEVICE_ACTION_OPEN && data->type == FP_DEVICE_TASK_RETURN_ERROR)))
+  if (priv->is_removed
+      && ((action != FPI_DEVICE_ACTION_OPEN)
+          || (action == FPI_DEVICE_ACTION_OPEN && data->type == FP_DEVICE_TASK_RETURN_ERROR)))
     {
+      /* The caller's error is superseded by the removal result. */
+      if (data->type == FP_DEVICE_TASK_RETURN_ERROR)
+        g_clear_pointer (&data->result, g_error_free);
+
       g_task_return_error (task, fpi_device_error_new (FP_DEVICE_ERROR_REMOVED));
 
       /* NOTE: The removed signal will be emitted from the GTask
@@ -1118,13 +1592,12 @@ fp_device_task_return_in_idle_cb (gpointer user_data)
       break;
 
     case FP_DEVICE_TASK_RETURN_OBJECT:
-      g_task_return_pointer (task, g_steal_pointer (&data->result),
-                             g_object_unref);
+      g_task_return_pointer (task, g_steal_pointer (&data->result), g_object_unref);
       break;
 
     case FP_DEVICE_TASK_RETURN_PTR_ARRAY:
-      g_task_return_pointer (task, g_steal_pointer (&data->result),
-                             (GDestroyNotify) g_ptr_array_unref);
+      g_task_return_pointer (
+          task, g_steal_pointer (&data->result), (GDestroyNotify)g_ptr_array_unref);
       break;
 
     case FP_DEVICE_TASK_RETURN_ERROR:
@@ -1159,15 +1632,15 @@ fpi_device_task_return_data_free (FpDeviceTaskReturnData *data)
       break;
 
     case FP_DEVICE_TASK_RETURN_OBJECT:
-      g_clear_object ((GObject **) &data->result);
+      g_clear_object ((GObject **)&data->result);
       break;
 
     case FP_DEVICE_TASK_RETURN_PTR_ARRAY:
-      g_clear_pointer ((GPtrArray **) &data->result, g_ptr_array_unref);
+      g_clear_pointer ((GPtrArray **)&data->result, g_ptr_array_unref);
       break;
 
     case FP_DEVICE_TASK_RETURN_ERROR:
-      g_clear_error ((GError **) &data->result);
+      g_clear_error ((GError **)&data->result);
       break;
 
     default:
@@ -1188,9 +1661,8 @@ fpi_device_task_return_data_free (FpDeviceTaskReturnData *data)
  * the passed @returned_data.
  */
 static void
-fpi_device_return_task_in_idle (FpDevice              *device,
-                                FpDeviceTaskReturnType return_type,
-                                gpointer               return_data)
+fpi_device_return_task_in_idle (
+    FpDevice *device, FpDeviceTaskReturnType return_type, gpointer return_data)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpDeviceTaskReturnData *data;
@@ -1201,15 +1673,12 @@ fpi_device_return_task_in_idle (FpDevice              *device,
   data->result = return_data;
 
   priv->current_task_idle_return_source = g_idle_source_new ();
-  g_source_set_priority (priv->current_task_idle_return_source,
-                         g_task_get_priority (priv->current_task));
-  g_source_set_callback (priv->current_task_idle_return_source,
-                         fp_device_task_return_in_idle_cb,
-                         data,
-                         (GDestroyNotify) fpi_device_task_return_data_free);
+  g_source_set_priority (
+      priv->current_task_idle_return_source, g_task_get_priority (priv->current_task));
+  g_source_set_callback (priv->current_task_idle_return_source, fp_device_task_return_in_idle_cb,
+      data, (GDestroyNotify)fpi_device_task_return_data_free);
 
-  g_source_attach (priv->current_task_idle_return_source,
-                   g_task_get_context (priv->current_task));
+  g_source_attach (priv->current_task_idle_return_source, g_task_get_context (priv->current_task));
   g_source_unref (priv->current_task_idle_return_source);
 }
 
@@ -1223,10 +1692,8 @@ fpi_device_return_task_in_idle (FpDevice              *device,
  * Finish an ongoing probe operation. If error is %NULL success is assumed.
  */
 void
-fpi_device_probe_complete (FpDevice    *device,
-                           const gchar *device_id,
-                           const gchar *device_name,
-                           GError      *error)
+fpi_device_probe_complete (
+    FpDevice *device, const gchar *device_id, const gchar *device_name, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -1237,8 +1704,8 @@ fpi_device_probe_complete (FpDevice    *device,
     {
       g_autofree char *error_str = error_to_string (error);
 
-      g_debug ("Device reported probe completion (ID: %s, name: %s, error: %s)",
-               device_id, device_name, error_str);
+      g_debug ("Device reported probe completion (ID: %s, name: %s, error: %s)", device_id,
+          device_name, error_str);
     }
 
   clear_device_cancel_action (device);
@@ -1258,8 +1725,7 @@ fpi_device_probe_complete (FpDevice    *device,
           priv->device_name = g_strdup (device_name);
           g_object_notify (G_OBJECT (device), "name");
         }
-      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL,
-                                      GUINT_TO_POINTER (TRUE));
+      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
     }
   else
     {
@@ -1292,11 +1758,28 @@ fpi_device_open_complete (FpDevice *device, GError *error)
   clear_device_cancel_action (device);
   fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
 
-  if (!error)
-    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL,
-                                    GUINT_TO_POINTER (TRUE));
+  if (error)
+    {
+      g_autoptr (GError) close_error = NULL;
+
+      /* A failed or cancelled OPEN still owns the core handle.  Close it as
+       * a unit and drop any half-finished re-enumeration transaction. */
+      if (priv->type == FP_DEVICE_TYPE_USB && priv->usb_handle_open)
+        {
+          if (!g_usb_device_close (priv->usb_device, &close_error))
+            g_debug ("Failed to close core USB handle after failed open: %s", close_error->message);
+
+          priv->usb_handle_open = FALSE;
+        }
+
+      fpi_device_usb_abort_reenumeration (device);
+
+      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
+    }
   else
-    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
+    {
+      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
+    }
 }
 
 /**
@@ -1309,7 +1792,7 @@ fpi_device_open_complete (FpDevice *device, GError *error)
 void
 fpi_device_close_complete (FpDevice *device, GError *error)
 {
-  g_autoptr(GError) nested_error = NULL;
+  g_autoptr (GError) nested_error = NULL;
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
   g_return_if_fail (FP_IS_DEVICE (device));
@@ -1328,13 +1811,22 @@ fpi_device_close_complete (FpDevice *device, GError *error)
   switch (priv->type)
     {
     case FP_DEVICE_TYPE_USB:
-      if (!g_usb_device_close (priv->usb_device, &nested_error))
+      /* Only the handle this core actually opened is closed here.  Drivers
+       * must never close it themselves. */
+      if (priv->usb_handle_open)
         {
-          if (error == NULL)
-            error = g_steal_pointer (&nested_error);
+          if (!g_usb_device_close (priv->usb_device, &nested_error))
+            {
+              priv->usb_handle_open = FALSE;
 
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
-          return;
+              if (error == NULL)
+                error = g_steal_pointer (&nested_error);
+
+              fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
+              return;
+            }
+
+          priv->usb_handle_open = FALSE;
         }
       break;
 
@@ -1344,14 +1836,13 @@ fpi_device_close_complete (FpDevice *device, GError *error)
 
     default:
       g_assert_not_reached ();
-      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR,
-                                      fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
+      fpi_device_return_task_in_idle (
+          device, FP_DEVICE_TASK_RETURN_ERROR, fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
       return;
     }
 
   if (!error)
-    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL,
-                                    GUINT_TO_POINTER (TRUE));
+    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
   else
     fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
 }
@@ -1377,8 +1868,7 @@ fpi_device_enroll_complete (FpDevice *device, FpPrint *print, GError *error)
     {
       g_autofree char *error_str = error_to_string (error);
 
-      g_debug ("Device reported enroll completion (print: %p, error: %s)",
-               print, error_str);
+      g_debug ("Device reported enroll completion (print: %p, error: %s)", print, error_str);
     }
 
   clear_device_cancel_action (device);
@@ -1396,15 +1886,16 @@ fpi_device_enroll_complete (FpDevice *device, FpPrint *print, GError *error)
               g_warning ("Driver did not set the type on the returned print!");
               g_clear_object (&print);
 
-              error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                                "Driver provided incorrect print data!");
+              error = fpi_device_error_new_msg (
+                  FP_DEVICE_ERROR_GENERAL, "Driver provided incorrect print data!");
               fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
               return;
             }
 
           if (!g_log_writer_default_would_drop (G_LOG_LEVEL_DEBUG, G_LOG_DOMAIN))
             {
-              g_autofree char *finger_str = g_enum_to_string (FP_TYPE_FINGER, fp_print_get_finger (print));
+              g_autofree char *finger_str
+                  = g_enum_to_string (FP_TYPE_FINGER, fp_print_get_finger (print));
 
               g_debug ("Print for finger %s enrolled", finger_str);
             }
@@ -1414,8 +1905,8 @@ fpi_device_enroll_complete (FpDevice *device, FpPrint *print, GError *error)
       else
         {
           g_warning ("Driver did not provide a valid print and failed to provide an error!");
-          error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                            "Driver failed to provide print data!");
+          error = fpi_device_error_new_msg (
+              FP_DEVICE_ERROR_GENERAL, "Driver failed to provide print data!");
           fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
         }
     }
@@ -1445,8 +1936,7 @@ fpi_device_enroll_complete (FpDevice *device, FpPrint *print, GError *error)
  * have been already reported via fpi_device_verify_report().
  */
 void
-fpi_device_verify_complete (FpDevice *device,
-                            GError   *error)
+fpi_device_verify_complete (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data;
@@ -1470,18 +1960,20 @@ fpi_device_verify_complete (FpDevice *device,
     {
       if (!data->result_reported)
         {
-          g_warning ("Driver reported successful verify complete but did not report the result earlier. Reporting error instead");
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR,
-                                          fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
+          g_warning ("Driver reported successful verify complete but did not report the result "
+                     "earlier. Reporting error instead");
+          fpi_device_return_task_in_idle (
+              device, FP_DEVICE_TASK_RETURN_ERROR, fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
         }
       else if (data->error)
         {
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, g_steal_pointer (&data->error));
+          fpi_device_return_task_in_idle (
+              device, FP_DEVICE_TASK_RETURN_ERROR, g_steal_pointer (&data->error));
         }
       else
         {
           fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_INT,
-                                          GINT_TO_POINTER (data->match != NULL ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL));
+              GINT_TO_POINTER (data->match != NULL ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL));
         }
     }
   else
@@ -1515,8 +2007,7 @@ fpi_device_verify_complete (FpDevice *device,
  * already reported via fpi_device_identify_report()
  */
 void
-fpi_device_identify_complete (FpDevice *device,
-                              GError   *error)
+fpi_device_identify_complete (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data;
@@ -1540,17 +2031,20 @@ fpi_device_identify_complete (FpDevice *device,
     {
       if (!data->result_reported)
         {
-          g_warning ("Driver reported successful identify complete but did not report the result earlier. Reporting error instead");
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR,
-                                          fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
+          g_warning ("Driver reported successful identify complete but did not report the result "
+                     "earlier. Reporting error instead");
+          fpi_device_return_task_in_idle (
+              device, FP_DEVICE_TASK_RETURN_ERROR, fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
         }
       else if (data->error)
         {
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, g_steal_pointer (&data->error));
+          fpi_device_return_task_in_idle (
+              device, FP_DEVICE_TASK_RETURN_ERROR, g_steal_pointer (&data->error));
         }
       else
         {
-          fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
+          fpi_device_return_task_in_idle (
+              device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
         }
     }
   else
@@ -1569,7 +2063,6 @@ fpi_device_identify_complete (FpDevice *device,
     }
 }
 
-
 /**
  * fpi_device_capture_complete:
  * @device: The #FpDevice
@@ -1579,9 +2072,7 @@ fpi_device_identify_complete (FpDevice *device,
  * Finish an ongoing capture operation.
  */
 void
-fpi_device_capture_complete (FpDevice *device,
-                             FpImage  *image,
-                             GError   *error)
+fpi_device_capture_complete (FpDevice *device, FpImage *image, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -1592,8 +2083,7 @@ fpi_device_capture_complete (FpDevice *device,
     {
       g_autofree char *error_str = error_to_string (error);
 
-      g_debug ("Device reported capture completion (image: %p, error: %s)",
-               image, error_str);
+      g_debug ("Device reported capture completion (image: %p, error: %s)", image, error_str);
     }
 
   clear_device_cancel_action (device);
@@ -1608,8 +2098,8 @@ fpi_device_capture_complete (FpDevice *device,
       else
         {
           g_warning ("Driver did not provide an error for a failed capture operation!");
-          error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                            "Driver failed to provide an error!");
+          error = fpi_device_error_new_msg (
+              FP_DEVICE_ERROR_GENERAL, "Driver failed to provide an error!");
           fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
         }
     }
@@ -1632,8 +2122,7 @@ fpi_device_capture_complete (FpDevice *device,
  * Finish an ongoing delete operation.
  */
 void
-fpi_device_delete_complete (FpDevice *device,
-                            GError   *error)
+fpi_device_delete_complete (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -1651,8 +2140,7 @@ fpi_device_delete_complete (FpDevice *device,
   fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
 
   if (!error)
-    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL,
-                                    GUINT_TO_POINTER (TRUE));
+    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
   else
     fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
 }
@@ -1660,7 +2148,8 @@ fpi_device_delete_complete (FpDevice *device,
 /**
  * fpi_device_list_complete:
  * @device: The #FpDevice
- * @prints: (element-type FpPrint) (transfer container): Possibly empty array of prints or %NULL on error
+ * @prints: (element-type FpPrint) (transfer container): Possibly empty array of prints or %NULL on
+ * error
  * @error: (nullable) (transfer full): The #GError or %NULL on success
  *
  * Finish an ongoing list operation.
@@ -1671,9 +2160,7 @@ fpi_device_delete_complete (FpDevice *device,
  * g_object_unref() as free func to create the array.
  */
 void
-fpi_device_list_complete (FpDevice  *device,
-                          GPtrArray *prints,
-                          GError    *error)
+fpi_device_list_complete (FpDevice *device, GPtrArray *prints, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -1685,7 +2172,7 @@ fpi_device_list_complete (FpDevice  *device,
       g_autofree char *error_str = error_to_string (error);
 
       g_debug ("Device reported listing completion (prints: %ld, error: %s)",
-               prints ? (long) prints->len : -1, error_str);
+          prints ? (long)prints->len : -1, error_str);
     }
 
   clear_device_cancel_action (device);
@@ -1699,8 +2186,8 @@ fpi_device_list_complete (FpDevice  *device,
   else if (!prints && !error)
     {
       g_warning ("Driver did not pass array but failed to provide an error");
-      error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                        "Driver failed to provide a list of prints");
+      error = fpi_device_error_new_msg (
+          FP_DEVICE_ERROR_GENERAL, "Driver failed to provide a list of prints");
     }
 
   if (!error)
@@ -1753,7 +2240,7 @@ update_attr (const char *attr, const char *value)
 static void
 complete_suspend_resume_task (FpDevice *device)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr (GTask) task = NULL;
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
   g_assert (priv->suspend_resume_task);
@@ -1790,7 +2277,8 @@ fpi_device_suspend (FpDevice *device)
         }
       else
         {
-          fpi_device_suspend_complete (device, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
+          fpi_device_suspend_complete (
+              device, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
         }
       break;
 
@@ -1801,11 +2289,8 @@ fpi_device_suspend (FpDevice *device)
     case FPI_DEVICE_ACTION_DELETE:
     case FPI_DEVICE_ACTION_LIST:
     case FPI_DEVICE_ACTION_CLEAR_STORAGE:
-      g_signal_connect_object (priv->current_task,
-                               "notify::completed",
-                               G_CALLBACK (complete_suspend_resume_task),
-                               device,
-                               G_CONNECT_SWAPPED);
+      g_signal_connect_object (priv->current_task, "notify::completed",
+          G_CALLBACK (complete_suspend_resume_task), device, G_CONNECT_SWAPPED);
 
       break;
     }
@@ -1862,8 +2347,8 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
     {
     case FP_DEVICE_TYPE_USB:
       {
-        g_autoptr(GString) ports = NULL;
-        g_autoptr(GUsbDevice) dev = NULL;
+        g_autoptr (GString) ports = NULL;
+        g_autoptr (GUsbDevice) dev = NULL;
         const char *wakeup_command = enabled ? "enabled" : "disabled";
         guint8 bus;
         g_autofree gchar *sysfs_wakeup = NULL;
@@ -1877,7 +2362,7 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
         g_set_object (&dev, priv->usb_device);
         while (TRUE)
           {
-            g_autoptr(GUsbDevice) parent = g_usb_device_get_parent (dev);
+            g_autoptr (GUsbDevice) parent = g_usb_device_get_parent (dev);
             g_autofree gchar *port_str = NULL;
             guint8 port;
 
@@ -1889,6 +2374,12 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
             g_string_prepend (ports, port_str);
             g_set_object (&dev, parent);
           }
+
+        /* A root hub (and an emulated device) has no port chain and no
+         * per-device sysfs power attributes. */
+        if (ports->len == 0)
+          break;
+
         g_string_set_size (ports, ports->len - 1);
 
         sysfs_wakeup = g_strdup_printf ("/sys/bus/usb/devices/%d-%s/power/wakeup", bus, ports->str);
@@ -1901,7 +2392,8 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
          * This is not helpful, as it will receive a reset and will be in a bad
          * state. Instead, seeing an unplug and a new device makes more sense.
          */
-        sysfs_persist = g_strdup_printf ("/sys/bus/usb/devices/%d-%s/power/persist", bus, ports->str);
+        sysfs_persist
+            = g_strdup_printf ("/sys/bus/usb/devices/%d-%s/power/persist", bus, ports->str);
         res = update_attr (sysfs_persist, "0");
         if (res < 0)
           g_warning ("Failed to disable USB persist by writing to %s", sysfs_persist);
@@ -1915,8 +2407,8 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
 
     default:
       g_assert_not_reached ();
-      fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR,
-                                      fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
+      fpi_device_return_task_in_idle (
+          device, FP_DEVICE_TASK_RETURN_ERROR, fpi_device_error_new (FP_DEVICE_ERROR_GENERAL));
       return;
     }
 }
@@ -1924,7 +2416,7 @@ fpi_device_configure_wakeup (FpDevice *device, gboolean enabled)
 static void
 fpi_device_suspend_completed (FpDevice *device)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr (GTask) task = NULL;
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
   /* We have an ongoing operation, allow the device to wake up the machine. */
@@ -1958,8 +2450,7 @@ fpi_device_suspend_completed (FpDevice *device)
  * It is recommended to set @error to #FP_DEVICE_ERROR_NOT_SUPPORTED.
  */
 void
-fpi_device_suspend_complete (FpDevice *device,
-                             GError   *error)
+fpi_device_suspend_complete (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -1978,24 +2469,20 @@ fpi_device_suspend_complete (FpDevice *device,
   priv->is_suspended = TRUE;
 
   /* If there is no error, we have no running task, return immediately. */
-  if (!priv->suspend_error || !priv->current_task ||
-      g_task_get_completed (priv->current_task))
+  if (!priv->suspend_error || !priv->current_task || g_task_get_completed (priv->current_task))
     {
       fpi_device_suspend_completed (device);
       return;
     }
 
   /* Wait for completion of the current task. */
-  g_signal_connect_object (priv->current_task,
-                           "notify::completed",
-                           G_CALLBACK (fpi_device_suspend_completed),
-                           device,
-                           G_CONNECT_SWAPPED);
+  g_signal_connect_object (priv->current_task, "notify::completed",
+      G_CALLBACK (fpi_device_suspend_completed), device, G_CONNECT_SWAPPED);
 
   /* And cancel any action that might be long-running. */
   if (!priv->current_cancellation_reason)
-    priv->current_cancellation_reason = fpi_device_error_new_msg (FP_DEVICE_ERROR_BUSY,
-                                                                  "Cannot run while suspended.");
+    priv->current_cancellation_reason
+        = fpi_device_error_new_msg (FP_DEVICE_ERROR_BUSY, "Cannot run while suspended.");
 
   g_cancellable_cancel (priv->current_cancellable);
 }
@@ -2008,10 +2495,9 @@ fpi_device_suspend_complete (FpDevice *device,
  * Finish a resume request.
  */
 void
-fpi_device_resume_complete (FpDevice *device,
-                            GError   *error)
+fpi_device_resume_complete (FpDevice *device, GError *error)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr (GTask) task = NULL;
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
   g_return_if_fail (FP_IS_DEVICE (device));
@@ -2043,8 +2529,7 @@ fpi_device_resume_complete (FpDevice *device,
  * Finish an ongoing clear_storage operation.
  */
 void
-fpi_device_clear_storage_complete (FpDevice *device,
-                                   GError   *error)
+fpi_device_clear_storage_complete (FpDevice *device, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -2062,8 +2547,7 @@ fpi_device_clear_storage_complete (FpDevice *device,
   fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
 
   if (!error)
-    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL,
-                                    GUINT_TO_POINTER (TRUE));
+    fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_BOOL, GUINT_TO_POINTER (TRUE));
   else
     fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
 }
@@ -2080,10 +2564,7 @@ fpi_device_clear_storage_complete (FpDevice *device,
  * The passed error may be used if a scan needs to be retried, use fpi_device_retry_new().
  */
 void
-fpi_device_enroll_progress (FpDevice *device,
-                            gint      completed_stages,
-                            FpPrint  *print,
-                            GError   *error)
+fpi_device_enroll_progress (FpDevice *device, gint completed_stages, FpPrint *print, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpEnrollData *data;
@@ -2092,7 +2573,8 @@ fpi_device_enroll_progress (FpDevice *device,
   g_return_if_fail (priv->current_action == FPI_DEVICE_ACTION_ENROLL);
   g_return_if_fail (error == NULL || error->domain == FP_DEVICE_RETRY);
 
-  g_debug ("Device reported enroll progress, reported %i of %i have been completed", completed_stages, priv->nr_enroll_stages);
+  g_debug ("Device reported enroll progress, reported %i of %i have been completed",
+      completed_stages, priv->nr_enroll_stages);
 
   if (print)
     g_object_ref_sink (print);
@@ -2107,11 +2589,7 @@ fpi_device_enroll_progress (FpDevice *device,
 
   if (data->enroll_progress_cb)
     {
-      data->enroll_progress_cb (device,
-                                completed_stages,
-                                print,
-                                data->enroll_progress_data,
-                                error);
+      data->enroll_progress_cb (device, completed_stages, print, data->enroll_progress_data, error);
     }
 
   g_clear_error (&error);
@@ -2130,10 +2608,7 @@ fpi_device_enroll_progress (FpDevice *device,
  * the error should passed to fpi_device_verify_complete().
  */
 void
-fpi_device_verify_report (FpDevice      *device,
-                          FpiMatchResult result,
-                          FpPrint       *print,
-                          GError        *error)
+fpi_device_verify_report (FpDevice *device, FpiMatchResult result, FpPrint *print, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data = g_task_get_task_data (priv->current_task);
@@ -2150,8 +2625,8 @@ fpi_device_verify_report (FpDevice      *device,
       g_autofree char *result_str = g_enum_to_string (FPI_TYPE_MATCH_RESULT, result);
       g_autofree char *error_str = error_to_string (error);
 
-      g_debug ("Device reported verify result (result: %s, print: %p, error: %s)",
-               result_str, print, error_str);
+      g_debug ("Device reported verify result (result: %s, print: %p, error: %s)", result_str,
+          print, error_str);
     }
 
   if (print)
@@ -2164,7 +2639,8 @@ fpi_device_verify_report (FpDevice      *device,
 
       if (error == NULL)
         {
-          g_warning ("Driver reported an error without specifying a retry code, assuming general retry error!");
+          g_warning ("Driver reported an error without specifying a retry code, assuming general "
+                     "retry error!");
           error = fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL);
         }
 
@@ -2178,7 +2654,8 @@ fpi_device_verify_report (FpDevice      *device,
 
       if (error->domain != FP_DEVICE_RETRY)
         {
-          g_warning ("Driver reported a verify error that was not in the retry domain, delaying report!");
+          g_warning (
+              "Driver reported a verify error that was not in the retry domain, delaying report!");
           call_cb = FALSE;
         }
     }
@@ -2189,11 +2666,11 @@ fpi_device_verify_report (FpDevice      *device,
           fpi_device_get_verify_data (device, &data->match);
           g_object_ref (data->match);
 
-          if (print &&
-              fpi_print_get_type (print) != FPI_PRINT_NBIS &&
-              !fp_print_equal (print, data->match))
+          if (print && fpi_print_get_type (print) != FPI_PRINT_NBIS
+              && !fp_print_equal (print, data->match))
             {
-              g_warning ("Driver reported a match providing a scanned print that is not matching it.");
+              g_warning (
+                  "Driver reported a match providing a scanned print that is not matching it.");
               g_clear_object (&print);
             }
         }
@@ -2231,10 +2708,7 @@ fpi_device_verify_report (FpDevice      *device,
  * fpi_device_identify_complete().
  */
 void
-fpi_device_identify_report (FpDevice *device,
-                            FpPrint  *match,
-                            FpPrint  *print,
-                            GError   *error)
+fpi_device_identify_report (FpDevice *device, FpPrint *match, FpPrint *print, GError *error)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpMatchData *data = g_task_get_task_data (priv->current_task);
@@ -2256,8 +2730,8 @@ fpi_device_identify_report (FpDevice *device,
     {
       g_autofree char *error_str = error_to_string (error);
 
-      g_debug ("Device reported identify result (match: %p, print: %p, error: %s)",
-               match, print, error_str);
+      g_debug ("Device reported identify result (match: %p, print: %p, error: %s)", match, print,
+          error_str);
     }
 
   if (match && !g_ptr_array_find (data->gallery, match, NULL))
@@ -2284,17 +2758,19 @@ fpi_device_identify_report (FpDevice *device,
 
       if (error->domain != FP_DEVICE_RETRY)
         {
-          g_warning ("Driver reported a verify error that was not in the retry domain, delaying report!");
+          g_warning (
+              "Driver reported a verify error that was not in the retry domain, delaying report!");
           call_cb = FALSE;
         }
     }
   else
     {
-      if (match && print && fpi_print_get_type (print) != FPI_PRINT_NBIS &&
-          !g_ptr_array_find_with_equal_func (data->gallery, print,
-                                             (GEqualFunc) fp_print_equal, NULL))
+      if (match && print && fpi_print_get_type (print) != FPI_PRINT_NBIS
+          && !g_ptr_array_find_with_equal_func (
+              data->gallery, print, (GEqualFunc)fp_print_equal, NULL))
         {
-          g_warning ("Driver reported a match providing a scanned print that is not matching any in the gallery.");
+          g_warning ("Driver reported a match providing a scanned print that is not matching any "
+                     "in the gallery.");
           g_clear_object (&print);
         }
 
@@ -2320,8 +2796,7 @@ fpi_device_identify_report (FpDevice *device,
  * Returns: %TRUE if changed
  */
 gboolean
-fpi_device_report_finger_status (FpDevice           *device,
-                                 FpFingerStatusFlags finger_status)
+fpi_device_report_finger_status (FpDevice *device, FpFingerStatusFlags finger_status)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
 
@@ -2336,8 +2811,7 @@ fpi_device_report_finger_status (FpDevice           *device,
       old_status_string = g_flags_to_string (FP_TYPE_FINGER_STATUS_FLAGS, priv->finger_status);
       status_string = g_flags_to_string (FP_TYPE_FINGER_STATUS_FLAGS, finger_status);
 
-      g_debug ("Device reported finger status change: %s -> %s",
-               old_status_string, status_string);
+      g_debug ("Device reported finger status change: %s -> %s", old_status_string, status_string);
     }
 
   priv->finger_status = finger_status;
@@ -2360,9 +2834,8 @@ fpi_device_report_finger_status (FpDevice           *device,
  * Returns: %TRUE if changed
  */
 gboolean
-fpi_device_report_finger_status_changes (FpDevice           *device,
-                                         FpFingerStatusFlags added_status,
-                                         FpFingerStatusFlags removed_status)
+fpi_device_report_finger_status_changes (
+    FpDevice *device, FpFingerStatusFlags added_status, FpFingerStatusFlags removed_status)
 {
   FpDevicePrivate *priv = fp_device_get_instance_private (device);
   FpFingerStatusFlags finger_status = priv->finger_status;
@@ -2453,14 +2926,10 @@ fpi_device_update_temp (FpDevice *device, gboolean is_active)
       g_autofree char *old_temp_str = g_enum_to_string (FP_TYPE_TEMPERATURE, old_temp);
       g_autofree char *new_temp_str = g_enum_to_string (FP_TYPE_TEMPERATURE, priv->temp_current);
 
-      g_debug ("Updated temperature model after %0.2f seconds, ratio %0.2f -> %0.2f, active %d -> %d, %s -> %s",
-               passed_seconds,
-               old_ratio,
-               priv->temp_current_ratio,
-               priv->temp_last_active,
-               is_active,
-               old_temp_str,
-               new_temp_str);
+      g_debug ("Updated temperature model after %0.2f seconds, ratio %0.2f -> %0.2f, active %d -> "
+               "%d, %s -> %s",
+          passed_seconds, old_ratio, priv->temp_current_ratio, priv->temp_last_active, is_active,
+          old_temp_str, new_temp_str);
     }
 
   if (priv->temp_current != old_temp)
@@ -2469,10 +2938,10 @@ fpi_device_update_temp (FpDevice *device, gboolean is_active)
   /* If the device is HOT, then do an internal cancellation of long running tasks. */
   if (priv->temp_current == FP_TEMPERATURE_HOT)
     {
-      if (priv->current_action == FPI_DEVICE_ACTION_ENROLL ||
-          priv->current_action == FPI_DEVICE_ACTION_VERIFY ||
-          priv->current_action == FPI_DEVICE_ACTION_IDENTIFY ||
-          priv->current_action == FPI_DEVICE_ACTION_CAPTURE)
+      if (priv->current_action == FPI_DEVICE_ACTION_ENROLL
+          || priv->current_action == FPI_DEVICE_ACTION_VERIFY
+          || priv->current_action == FPI_DEVICE_ACTION_IDENTIFY
+          || priv->current_action == FPI_DEVICE_ACTION_CAPTURE)
         {
           if (!priv->current_cancellation_reason)
             priv->current_cancellation_reason = fpi_device_error_new (FP_DEVICE_ERROR_TOO_HOT);
@@ -2488,14 +2957,13 @@ fpi_device_update_temp (FpDevice *device, gboolean is_active)
 
   /* Set passed_seconds to the time until the next update is needed */
   if (is_active)
-    passed_seconds = -priv->temp_hot_seconds * log ((next_threshold - 1.0) / (priv->temp_current_ratio - 1.0));
+    passed_seconds
+        = -priv->temp_hot_seconds * log ((next_threshold - 1.0) / (priv->temp_current_ratio - 1.0));
   else
     passed_seconds = -priv->temp_cold_seconds * log (next_threshold / priv->temp_current_ratio);
 
   passed_seconds += TEMP_DELAY_SECONDS;
 
-  priv->temp_timeout = fpi_device_add_timeout (device,
-                                               passed_seconds * 1000,
-                                               update_temp_timeout,
-                                               NULL, NULL);
+  priv->temp_timeout
+      = fpi_device_add_timeout (device, passed_seconds * 1000, update_temp_timeout, NULL, NULL);
 }

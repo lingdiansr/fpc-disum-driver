@@ -171,6 +171,14 @@ fp_device_constructed (GObject *object)
   g_assert (cls->features != FP_DEVICE_FEATURE_NONE);
 
   priv->type = cls->type;
+
+  /* Record the complete physical identity once.  A device without a usable
+   * platform id keeps working normally; only explicit re-enumeration is
+   * refused for it. */
+  if (priv->type == FP_DEVICE_TYPE_USB && priv->usb_device != NULL)
+    priv->usb_identity_valid =
+      fpi_usb_identity_from_device (priv->usb_device, &priv->usb_identity);
+
   if (cls->nr_enroll_stages)
     priv->nr_enroll_stages = cls->nr_enroll_stages;
   priv->scan_type = cls->scan_type;
@@ -232,6 +240,10 @@ fp_device_finalize (GObject *object)
 
   g_clear_pointer (&priv->device_id, g_free);
   g_clear_pointer (&priv->device_name, g_free);
+
+  fpi_usb_identity_clear (&priv->usb_identity);
+  priv->usb_identity_valid = FALSE;
+  g_clear_object (&priv->usb_replacement);
 
   g_clear_object (&priv->usb_device);
   g_clear_pointer (&priv->virtual_env, g_free);
@@ -852,6 +864,7 @@ fp_device_open (FpDevice           *device,
           g_task_return_error (task, error);
           return;
         }
+      priv->usb_handle_open = TRUE;
       break;
 
     case FP_DEVICE_TYPE_VIRTUAL:

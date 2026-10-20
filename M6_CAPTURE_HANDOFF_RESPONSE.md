@@ -1,5 +1,7 @@
 # 规格侧回复：采集正向路径、按压对齐与 `EVT_ARM_RESULT`（M6 第二轮）
 
+> **历史答复，相关归因和门槛已撤回**：本文“零上报已定位为按早了”“≥10 s 必要门槛”“固定约 4 s 检测延迟”“秒级 timeout 等于稀疏轮询”“新会话必恢复”“每次初始化必变地址”均不能由现有证据推出。以 `M6_VERIFICATION_REVIEW.md`、`M6_VERIFICATION_RESPONSE.md` 及修订后规格为准；用户确认按压必须保留，零触摸根因仍未定位。
+
 - 日期：2026-10-18；回复对象：本仓库 `M6_CAPTURE_HANDOFF_REPORT.md`（被测 HEAD `c2038df`）。
 - 本次交付的基线（**含本次修订**）：
   - `docs/CLEANROOM_SPEC.md` = **77,625 B** / sha256 `e1a5d7d58c6903f9bcb4d862ef69d00cf45d2be1fd3d9b582c1f7bad586b08dc`

@@ -11,10 +11,13 @@
 
 #include <string.h>
 
+#include "config.h"
+
 #include "fpi-device.h"
 #include "fpi-image.h"
 #include "fpi-image-device.h"
 
+#include "fpc_disum_diagnostics.h"
 #include "fpc_disum_error.h"
 #include "fpc_disum_proto.h"
 #include "fpc_disum_session.h"
@@ -62,6 +65,11 @@ struct _FpiDeviceFpcDisum
   /* Cancellation during open, where the image-device core sends no deactivate. */
   GCancellable *open_cancellable;
   gulong open_cancellable_id;
+
+  /* De-sensitised completion records for one device (all opens share the run).
+   * The driver only forwards them; the probe owns all evidence files. */
+  FpcDisumDiagnostics *diagnostics;
+  guint diagnostic_signal_id;
 };
 
 G_DECLARE_FINAL_TYPE (
@@ -211,6 +219,46 @@ dev_touch (gpointer user_data)
   fpi_image_device_report_finger_status (FP_IMAGE_DEVICE (self), TRUE);
 }
 
+/* ARM completed with its four payload bytes; the session is now armed and
+ * waiting for the touch.  Only a capture may be announced: an ARM during
+ * initialisation or cleanup is never a cue for the operator. */
+static void
+dev_arm_complete (gsize actual_length, gpointer user_data)
+{
+  FpiDeviceFpcDisum *self = user_data;
+
+  if (self->state != FPC_DISUM_STATE_CAPTURING)
+    return;
+
+  g_signal_emit_by_name (self, "arm-complete", (guint) actual_length);
+}
+
+/* Forward one de-sensitised record to subscribers.  The variant is built only
+ * when someone listens, so an unattended run pays nothing for it. */
+static void
+dev_diagnostic (const FpcDisumDiagnosticRecord *record, gpointer user_data)
+{
+  FpiDeviceFpcDisum *self = user_data;
+  g_autoptr (GVariant) variant = NULL;
+
+  if (self->diagnostics == NULL || self->diagnostic_signal_id == 0)
+    return;
+
+  if (!g_signal_has_handler_pending (
+          FP_DEVICE (self), self->diagnostic_signal_id, 0, FALSE))
+    return;
+
+  /* to_variant() returns a floating reference; sink it so the GValue made by
+   * the emitter and this scope each own a reference. */
+  variant = fpc_disum_diagnostics_to_variant (self->diagnostics, record);
+  if (variant == NULL)
+    return;
+
+  g_variant_ref_sink (variant);
+
+  g_signal_emit (FP_DEVICE (self), self->diagnostic_signal_id, 0, variant);
+}
+
 /* ---------------------------------------------------------- core callbacks */
 
 static void
@@ -259,22 +307,30 @@ static void
 dev_open (FpImageDevice *dev)
 {
   FpiDeviceFpcDisum *self = FPI_DEVICE_FPC_DISUM (dev);
+  g_autoptr (GError) error = NULL;
 
   g_assert (self->state == FPC_DISUM_STATE_IDLE);
 
   self->state = FPC_DISUM_STATE_OPENING;
-  self->transport = fpc_disum_usb_transport_new (FP_DEVICE (dev));
+  self->transport
+      = fpc_disum_usb_transport_new (FP_DEVICE (dev), self->diagnostics, &error);
 
   if (self->transport == NULL)
     {
       self->state = FPC_DISUM_STATE_IDLE;
-      fpi_image_device_open_complete (dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                               "The device transport could not be created"));
+
+      if (error == NULL)
+        error = fpi_device_error_new_msg (
+            FP_DEVICE_ERROR_GENERAL, "The device transport could not be created");
+
+      fpi_image_device_open_complete (dev, g_steal_pointer (&error));
       return;
     }
 
   self->session = fpc_disum_session_new (self->transport);
+  fpc_disum_session_set_diagnostics (self->session, self->diagnostics);
   fpc_disum_session_set_touch_handler (self->session, dev_touch, self);
+  fpc_disum_session_set_arm_complete_handler (self->session, dev_arm_complete, self);
 
   /* An open has no deactivate to rely on, so a cancellation has to reach the
    * initialisation directly. */
@@ -389,6 +445,40 @@ static const FpIdEntry id_table[] = {
   { .vid = 0, .pid = 0, .driver_data = 0 },
 };
 
+/* Private read-only properties, deliberately not part of the public ABI: the
+ * probe binds its evidence to the build and the instance it actually loaded. */
+enum
+{
+  PROP_0,
+  PROP_FPC_DISUM_RUN_ID,
+  PROP_FPC_DISUM_SPEC_SHA256,
+};
+
+static void
+fpi_device_fpc_disum_get_property (
+    GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+{
+  FpiDeviceFpcDisum *self = FPI_DEVICE_FPC_DISUM (object);
+
+  switch (prop_id)
+    {
+    case PROP_FPC_DISUM_RUN_ID:
+      g_value_set_string (
+          value,
+          self->diagnostics != NULL ? fpc_disum_diagnostics_run_id (self->diagnostics) : NULL);
+      break;
+
+    case PROP_FPC_DISUM_SPEC_SHA256:
+      /* Build-time identity of the reviewed specification (config.h). */
+      g_value_set_string (value, FPC_DISUM_REVIEWED_SPEC_SHA256);
+      break;
+
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+    }
+}
+
 static void
 fpi_device_fpc_disum_finalize (GObject *object)
 {
@@ -401,8 +491,14 @@ fpi_device_fpc_disum_finalize (GObject *object)
     }
   g_clear_object (&self->open_cancellable);
 
+  /* Drop the observer before anything it could still reach is released, so no
+   * completion record can call back into a dying FpDevice. */
+  if (self->diagnostics != NULL)
+    fpc_disum_diagnostics_set_observer (self->diagnostics, NULL, NULL);
+
   g_clear_pointer (&self->session, fpc_disum_session_free);
   g_clear_pointer (&self->transport, fpc_disum_usb_transport_free);
+  g_clear_pointer (&self->diagnostics, fpc_disum_diagnostics_unref);
 
   G_OBJECT_CLASS (fpi_device_fpc_disum_parent_class)->finalize (object);
 }
@@ -410,6 +506,11 @@ fpi_device_fpc_disum_finalize (GObject *object)
 static void
 fpi_device_fpc_disum_init (FpiDeviceFpcDisum *self)
 {
+  self->diagnostics = fpc_disum_diagnostics_new ();
+  self->diagnostic_signal_id
+      = g_signal_lookup ("fpc-disum-diagnostic", G_OBJECT_TYPE (self));
+
+  fpc_disum_diagnostics_set_observer (self->diagnostics, dev_diagnostic, self);
 }
 
 static void
@@ -420,6 +521,29 @@ fpi_device_fpc_disum_class_init (FpiDeviceFpcDisumClass *klass)
   FpImageDeviceClass *img_class = FP_IMAGE_DEVICE_CLASS (klass);
 
   object_class->finalize = fpi_device_fpc_disum_finalize;
+  object_class->get_property = fpi_device_fpc_disum_get_property;
+
+  g_object_class_install_property (
+      object_class, PROP_FPC_DISUM_RUN_ID,
+      g_param_spec_string ("fpi-fpc-disum-run-id", "Run identifier",
+          "Diagnostic run identifier shared by every open of this device", NULL,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (
+      object_class, PROP_FPC_DISUM_SPEC_SHA256,
+      g_param_spec_string ("fpi-fpc-disum-spec-sha256", "Reviewed specification",
+          "SHA-256 of the cleanroom specification this driver was built against", NULL,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  /* One G_TYPE_UINT: the control transfer's actual length (four on success).
+   * The library never plays a sound or spawns a notification; the operator
+   * probe is the only consumer. */
+  g_signal_new ("arm-complete", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      NULL, G_TYPE_NONE, 1, G_TYPE_UINT);
+
+  /* One a{sv} of whitelisted metadata; never any I/O payload. */
+  g_signal_new ("fpc-disum-diagnostic", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL,
+      NULL, NULL, G_TYPE_NONE, 1, G_TYPE_VARIANT);
 
   dev_class->id = FP_COMPONENT;
   dev_class->full_name = "FPC Disum Fingerprint Sensor";

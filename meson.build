@@ -22,6 +22,17 @@ run_command(python3, fpc_disum_vector_tool, check: true)
 libfprint_conf = configuration_data()
 libfprint_conf.set_quoted('LIBFPRINT_VERSION', meson.project_version())
 
+# Bind the driver to the reviewed spec it was built against.  The digest is
+# computed from the same file check-cleanroom.py accepted above; it is a build
+# input identity, not a lookup of whatever file happens to exist at runtime.
+fpc_disum_spec_digest = run_command(
+  python3, '-c',
+  'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())',
+  meson.project_source_root() / 'docs/CLEANROOM_SPEC.md',
+  check: true,
+).stdout().strip()
+libfprint_conf.set_quoted('FPC_DISUM_REVIEWED_SPEC_SHA256', fpc_disum_spec_digest)
+
 prefix = get_option('prefix')
 libdir = prefix / get_option('libdir')
 libexecdir = prefix / get_option('libexecdir')
@@ -102,7 +113,9 @@ glib_dep = dependency('glib-2.0', version: '>=' + glib_min_version)
 gio_dep = dependency('gio-unix-2.0', version: '>=' + glib_min_version)
 gobject_dep = dependency('gobject-2.0', version: '>=' + glib_min_version)
 gmodule_dep = dependency('gmodule-2.0', version: '>=' + glib_min_version)
-gusb_dep = dependency('gusb', version: '>= 0.2.0')
+gusb_dep = dependency('gusb', version: '>= 0.4.0')
+libusb_dep = dependency('libusb-1.0', version: '>= 1.0.22')
+json_glib_dep = dependency('json-glib-1.0')
 mathlib_dep = cc.find_library('m', required: false)
 
 # The following dependencies are only used for tests

@@ -366,6 +366,50 @@ test_failed_channel_refuses_input (void)
 }
 
 static void
+test_close_notify_fails_the_channel (void)
+{
+  const FpcDisumCorpusEnvelopeVector *vector = accepted_envelope ();
+  Channel *channel = channel_new ("Disum PSK", vector->psk, vector->psk_len);
+  guint8 buffer[16];
+
+  drive (channel, FPC_DISUM_TLS_DATA_MAX);
+  g_assert_true (fpc_disum_tls_is_established (channel->server));
+
+  /* The synthetic peer shuts the channel down; close_notify is a closed channel,
+   * not an empty read (SPEC §8). */
+  ERR_clear_error ();
+  (void) SSL_shutdown (channel->client);
+  move_client_to_server (channel, FPC_DISUM_TLS_DATA_MAX);
+
+  g_assert_cmpint (fpc_disum_tls_read (channel->server, buffer, sizeof buffer), ==, -1);
+  g_assert_cmpint (fpc_disum_tls_status (channel->server), ==, FPC_DISUM_TLS_ERROR_CLOSED);
+  g_assert_false (fpc_disum_tls_is_established (channel->server));
+
+  channel_free (channel);
+}
+
+static void
+test_post_handshake_fatal_alert (void)
+{
+  const FpcDisumCorpusEnvelopeVector *vector = accepted_envelope ();
+  Channel *channel = channel_new ("Disum PSK", vector->psk, vector->psk_len);
+  /* TLS 1.2 fatal alert: handshake_failure. */
+  const guint8 alert[] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28 };
+  guint8 buffer[16];
+
+  drive (channel, FPC_DISUM_TLS_DATA_MAX);
+  g_assert_true (fpc_disum_tls_is_established (channel->server));
+
+  g_assert_true (fpc_disum_tls_feed (channel->server, alert, sizeof alert));
+
+  g_assert_cmpint (fpc_disum_tls_read (channel->server, buffer, sizeof buffer), ==, -1);
+  g_assert_cmpint (fpc_disum_tls_status (channel->server), ==, FPC_DISUM_TLS_ERROR_HANDSHAKE);
+  g_assert_false (fpc_disum_tls_is_established (channel->server));
+
+  channel_free (channel);
+}
+
+static void
 test_application_round_trip (void)
 {
   const FpcDisumCorpusEnvelopeVector *vector = accepted_envelope ();
@@ -410,6 +454,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/channel/cancel-mid-handshake", test_cancel_mid_handshake);
   g_test_add_func ("/channel/rejects-short-psk", test_rejects_short_psk);
   g_test_add_func ("/channel/failed-channel-refuses-input", test_failed_channel_refuses_input);
+  g_test_add_func ("/channel/close-notify-fails-the-channel", test_close_notify_fails_the_channel);
+  g_test_add_func ("/channel/post-handshake-fatal-alert", test_post_handshake_fatal_alert);
   g_test_add_func ("/channel/application-round-trip", test_application_round_trip);
 
   return g_test_run ();

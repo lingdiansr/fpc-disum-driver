@@ -22,7 +22,9 @@ G_BEGIN_DECLS
  *
  *   - cancellation          -> G_IO_ERROR_CANCELLED
  *   - a window that expired -> G_IO_ERROR_TIMED_OUT
- *   - a USB failure         -> G_IO_ERROR_FAILED
+ *   - a USB failure or a connection-generation change -> G_IO_ERROR_FAILED
+ *   - an unsupported automatic reset recovery -> FP_DEVICE_ERROR_NOT_SUPPORTED
+ *     with the stable logical string "unsupported-reset-recovery"
  *   - protocol or security  -> FP_DEVICE_ERROR_PROTO
  *   - a programming error   -> FP_DEVICE_ERROR_GENERAL
  *

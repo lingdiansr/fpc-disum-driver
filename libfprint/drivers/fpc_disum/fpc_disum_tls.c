@@ -473,8 +473,16 @@ fpc_disum_tls_read (FpcDisumTls *self, guint8 *buffer, gsize max_len)
   {
     int error = SSL_get_error (self->ssl, ret);
 
-    if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_ZERO_RETURN)
+    if (error == SSL_ERROR_WANT_READ)
       return 0;
+
+    self->failed = TRUE;
+    if (error == SSL_ERROR_ZERO_RETURN)
+      {
+        /* close_notify is a closed channel, never an empty read (SPEC §8). */
+        self->status = FPC_DISUM_TLS_ERROR_CLOSED;
+        return -1;
+      }
   }
 
   self->failed = TRUE;

@@ -254,15 +254,16 @@ libfpc_disum = static_library('fpc-disum',
         'drivers/fpc_disum/fpc_disum_tls.c',
         'drivers/fpc_disum/fpc_disum_session.c',
         'drivers/fpc_disum/fpc_disum_usb.c',
+        'drivers/fpc_disum/fpc_disum_diagnostics.c',
         'drivers/fpc_disum/fpc_disum_error.c',
     ),
-    dependencies: deps + [fpc_disum_crypto_dep],
+    dependencies: deps + [fpc_disum_crypto_dep, libusb_dep],
     install: false)
 
 fpc_disum_dep = declare_dependency(
     include_directories: include_directories('drivers/fpc_disum'),
     link_with: libfpc_disum,
-    dependencies: deps + [fpc_disum_crypto_dep],
+    dependencies: deps + [fpc_disum_crypto_dep, libusb_dep],
 )
 
 libfprint_private = static_library('fprint-private',

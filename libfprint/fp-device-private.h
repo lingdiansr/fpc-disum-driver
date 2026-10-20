@@ -39,6 +39,15 @@
 #define DEFAULT_TEMP_HOT_SECONDS (3 * 60)
 #define DEFAULT_TEMP_COLD_SECONDS (9 * 60)
 
+/* The explicit CMD_INIT reclaim transaction of a USB device.  Only the OPEN
+ * action may use this, and only one stage may be active at a time. */
+typedef enum
+{
+  FPI_DEVICE_USB_INIT_NONE = 0,
+  FPI_DEVICE_USB_INIT_CMD_PENDING,
+  FPI_DEVICE_USB_INIT_REACQUIRE,
+} FpiDeviceUsbInitStage;
+
 typedef struct
 {
   FpDeviceType type;
@@ -52,12 +61,22 @@ typedef struct
   } udev_data;
 
   gboolean        is_removed;
-  /* Set while the driver expects the device to leave the bus and come back by
-   * itself, so that is not reported as a removal (see
-   * fpi_device_usb_set_reenumeration_expected()). */
-  gboolean        usb_reenumeration_expected;
   gboolean        is_open;
   gboolean        is_suspended;
+
+  /* Physical USB identity recorded when the object was constructed. */
+  FpiUsbIdentity  usb_identity;
+  gboolean        usb_identity_valid;
+  /* Owned candidate for the explicit re-enumeration transaction. */
+  GUsbDevice     *usb_replacement;
+  /* Whether the current core GUsbDevice handle is owned as open by us. */
+  gboolean        usb_handle_open;
+  FpiDeviceUsbInitStage usb_init_stage;
+  gboolean        usb_departure_seen;
+  gint64          usb_rebind_deadline_us;
+  /* 0 means the generation is unknown. */
+  guint64         usb_generation;
+  guint64         usb_offered_generation;
 
   gchar          *device_id;
   gchar          *device_name;

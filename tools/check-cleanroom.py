@@ -8,7 +8,7 @@ import sys
 
 
 EXPECTED_DIGESTS = {
-    "docs/CLEANROOM_SPEC.md": "e1a5d7d58c6903f9bcb4d862ef69d00cf45d2be1fd3d9b582c1f7bad586b08dc",
+    "docs/CLEANROOM_SPEC.md": "b8feda4fc944d41c78347d5d08927ae86bcec38da35002360666c6bf20387b00",
     "docs/CLEANROOM_TEST_VECTORS.json": "ce04ce43665f2b2d27142f2c2ecd917b09219a87a82d4b3009c023baecfeda94",
 }
 

@@ -16,8 +16,9 @@
 
 G_BEGIN_DECLS
 
-/* SPEC §16.2 suggests failing a handshake that makes no progress for 5 s. */
-#define FPC_DISUM_HANDSHAKE_TIMEOUT_MS 5000
+/* SPEC §16.2: the total handshake transaction is bounded; progress does not
+ * extend the deadline. */
+#define FPC_DISUM_HANDSHAKE_TIMEOUT_MS 15000
 /* SPEC §6 step 4 gives the device up to 20 s to become visible again. */
 #define FPC_DISUM_REOPEN_TIMEOUT_MS 20000
 /* SPEC §16.3: default window for waiting for the touch, used for the image too. */
@@ -50,9 +51,14 @@ typedef enum
   FPC_DISUM_SESSION_ERROR_ARM_RESULT,
   /* Cancelled by the caller; not reported as a device failure (SPEC §16.3). */
   FPC_DISUM_SESSION_ERROR_CANCELLED,
+  /* The connection changed generation after TLS started; the open fails. */
+  FPC_DISUM_SESSION_ERROR_CONNECTION_CHANGED,
+  /* A session already ended by an abnormal reset was asked to recover. */
+  FPC_DISUM_SESSION_ERROR_UNSUPPORTED_RESET_RECOVERY,
 } FpcDisumSessionStatus;
 
 typedef struct _FpcDisumSession FpcDisumSession;
+typedef struct _FpcDisumDiagnostics FpcDisumDiagnostics;
 
 /* One event frame as it arrived, kept for diagnostics (SPEC §16.1). */
 typedef struct
@@ -111,8 +117,12 @@ void fpc_disum_session_free (FpcDisumSession *session);
 void fpc_disum_session_set_timeout_source (
     FpcDisumSession *session, const FpcDisumTimeoutSource *source);
 /*
- * Override a window; pass 0 to use the default.  Only allowed before the first
- * operation is started, and the values are never interpreted as "wait forever".
+ * Override a window; pass 0 to use the default.  @handshake_ms is the total
+ * handshake transaction bound, measured from the TLS_INIT submit and never
+ * extended by TLS_DATA progress.  @reopen_ms bounds the post-CMD_INIT reclaim
+ * and @capture_window_ms bounds the touch wait and the image.  Only allowed
+ * before the first operation is started, and the values are never interpreted
+ * as "wait forever".
  */
 void fpc_disum_session_set_timeouts (
     FpcDisumSession *session, guint handshake_ms, guint reopen_ms, guint capture_window_ms);
@@ -126,6 +136,21 @@ void fpc_disum_session_set_timeouts (
 typedef void (*FpcDisumTouchFunc) (gpointer user_data);
 void fpc_disum_session_set_touch_handler (
     FpcDisumSession *session, FpcDisumTouchFunc handler, gpointer user_data);
+
+/*
+ * Called once when ARM completed successfully with its four-byte payload.  The
+ * session is armed and waiting for the touch at that point; a handler that
+ * cancels or closes must not be followed by GET_IMG.
+ */
+typedef void (*FpcDisumArmCompleteFunc) (gsize actual_length, gpointer user_data);
+void fpc_disum_session_set_arm_complete_handler (
+    FpcDisumSession *session, FpcDisumArmCompleteFunc handler, gpointer user_data);
+
+/*
+ * Attach the de-sensitised completion recorder.  The session takes a reference;
+ * the transport is configured separately through its factory.
+ */
+void fpc_disum_session_set_diagnostics (FpcDisumSession *session, FpcDisumDiagnostics *diagnostics);
 
 /*
  * SPEC §6 + §8: 0x08, GET_STATE, CMD_INIT, the handle swap, GET_TLS_KEY with

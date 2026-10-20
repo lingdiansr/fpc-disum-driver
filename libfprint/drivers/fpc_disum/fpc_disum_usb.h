@@ -14,18 +14,19 @@
 #include <glib.h>
 
 #include "fpi-device.h"
+#include "fpc_disum_diagnostics.h"
 #include "fpc_disum_transport.h"
 
 G_BEGIN_DECLS
 
 /*
- * Create the GUsb/FpiUsbTransfer implementation of the transport boundary for
- * @device.  @device must be a USB #FpDevice (the handle is taken from
- * fpi_device_get_usb_device()); the transport borrows it for its whole lifetime
- * and never touches the GUsbDevice's configuration or interface claiming
- * outside fpc_disum_usb_transport_reopen().
+ * Create the libusb implementation of the transport boundary for @device.
+ * @device must be a USB #FpDevice.  The transport borrows it for its whole
+ * lifetime and uses the core's physical identity and reclaim transaction for
+ * the CMD_INIT handle swap.
  */
-FpcDisumTransport *fpc_disum_usb_transport_new (FpDevice *device);
+FpcDisumTransport *fpc_disum_usb_transport_new (
+    FpDevice *device, FpcDisumDiagnostics *diagnostics, GError **error);
 
 /*
  * Release the transport.  A transfer that is still in flight is cancelled and

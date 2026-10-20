@@ -22,6 +22,7 @@
 
 #include "fpi-context.h"
 #include "fpi-device.h"
+#include "fp-context-private.h"
 #include <gusb.h>
 #include <stdio.h>
 
@@ -43,6 +44,13 @@
  * that may be hotplugged at runtime.
  */
 
+/* A device that arrived for an identity whose previous FpDevice is still in
+ * the device list (or is waiting for its close before the idle removal). */
+typedef struct
+{
+  GUsbDevice *device; /* owned */
+} PendingUsbAdd;
+
 typedef struct
 {
   GUsbContext  *usb_ctx;
@@ -55,6 +63,7 @@ typedef struct
 
   GArray       *drivers;
   GPtrArray    *devices;
+  GPtrArray    *pending_usb_adds; /* of PendingUsbAdd */
 } FpContextPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (FpContext, fp_context, G_TYPE_OBJECT)
@@ -96,16 +105,100 @@ typedef struct
   GSource   *source;
 } RemoveDeviceData;
 
+static void discover_usb_device (FpContext *self, GUsbDevice *device);
+
+static void
+pending_usb_add_free (PendingUsbAdd *add)
+{
+  g_clear_object (&add->device);
+  g_free (add);
+}
+
+static void
+queue_pending_usb_add (FpContext *self, GUsbDevice *device)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (self);
+  PendingUsbAdd *add;
+  guint i;
+
+  for (i = 0; i < priv->pending_usb_adds->len; i++)
+    {
+      PendingUsbAdd *queued = g_ptr_array_index (priv->pending_usb_adds, i);
+
+      if (queued->device == device)
+        return;
+    }
+
+  add = g_new0 (PendingUsbAdd, 1);
+  add->device = g_object_ref (device);
+  g_ptr_array_add (priv->pending_usb_adds, add);
+}
+
+static void
+drop_pending_usb_device (FpContext *self, GUsbDevice *device)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (self);
+  guint i;
+
+  for (i = priv->pending_usb_adds->len; i > 0; i--)
+    {
+      PendingUsbAdd *add = g_ptr_array_index (priv->pending_usb_adds, i - 1);
+
+      if (add->device == device)
+        g_ptr_array_remove_index (priv->pending_usb_adds, i - 1);
+    }
+}
+
+/* Take the latest queued candidate belonging to @removed's physical identity.
+ * Older queued instances of the same identity are discarded. */
+static GUsbDevice *
+take_pending_usb_add (FpContext *self, FpDevice *removed)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (self);
+  GUsbDevice *latest = NULL;
+  guint i;
+
+  for (i = priv->pending_usb_adds->len; i > 0; i--)
+    {
+      PendingUsbAdd *add = g_ptr_array_index (priv->pending_usb_adds, i - 1);
+
+      if (!fpi_device_usb_matches (removed, add->device))
+        continue;
+
+      /* Iterating newest to oldest: keep the first (latest) candidate. */
+      if (latest == NULL)
+        g_set_object (&latest, add->device);
+
+      g_ptr_array_remove_index (priv->pending_usb_adds, i - 1);
+    }
+
+  return latest;
+}
+
 static gboolean
 remove_device_idle_cb (RemoveDeviceData *data)
 {
   FpContextPrivate *priv = fp_context_get_instance_private (data->context);
+  g_autoptr(FpDevice) removed = NULL;
+  GUsbDevice *candidate = NULL;
   guint idx = 0;
 
-  g_return_val_if_fail (g_ptr_array_find (priv->devices, data->device, &idx), G_SOURCE_REMOVE);
+  if (!g_ptr_array_find (priv->devices, data->device, &idx))
+    return G_SOURCE_REMOVE;
 
-  g_signal_emit (data->context, signals[DEVICE_REMOVED_SIGNAL], 0, data->device);
+  /* Hold the entry alive while it is spliced out and its identity is used to
+   * pick the queued successor. */
+  removed = g_object_ref (data->device);
+
+  g_signal_emit (data->context, signals[DEVICE_REMOVED_SIGNAL], 0, removed);
   g_ptr_array_remove_index_fast (priv->devices, idx);
+
+  candidate = take_pending_usb_add (data->context, removed);
+  if (candidate != NULL)
+    {
+      discover_usb_device (data->context, candidate);
+      g_object_unref (candidate);
+    }
 
   return G_SOURCE_REMOVE;
 }
@@ -199,8 +292,100 @@ async_device_init_done_cb (GObject *source_object, GAsyncResult *res, gpointer u
   g_signal_emit (context, signals[DEVICE_ADDED_SIGNAL], 0, device);
 }
 
+static FpDevice *
+find_usb_device_by_identity (FpContext *self, GUsbDevice *device)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (self);
+  guint i;
+
+  for (i = 0; i < priv->devices->len; i++)
+    {
+      FpDevice *dev = g_ptr_array_index (priv->devices, i);
+      FpDeviceClass *cls = FP_DEVICE_GET_CLASS (dev);
+
+      if (cls->type != FP_DEVICE_TYPE_USB)
+        continue;
+
+      if (fpi_device_usb_matches (dev, device))
+        return dev;
+    }
+
+  return NULL;
+}
+
 static void
 usb_device_added_cb (FpContext *self, GUsbDevice *device, GUsbContext *usb_ctx)
+{
+  FpDevice *existing;
+  gboolean removed = FALSE;
+
+  /* A replacement is routed by its complete physical identity, not by the
+   * driver's VID/PID table entry alone. */
+  existing = find_usb_device_by_identity (self, device);
+
+  if (existing == NULL)
+    {
+      discover_usb_device (self, device);
+      return;
+    }
+
+  /* Repeated add notification for the very same GUsb object.  A removed
+   * object is never resurrected, even if the same instance were re-announced. */
+  if (fpi_device_get_usb_device (existing) == device)
+    {
+      g_debug ("Ignoring duplicate add of the same USB object");
+      return;
+    }
+
+  g_object_get (existing, "removed", &removed, NULL);
+
+  /* The running OPEN transaction is waiting for exactly this device. */
+  if (!removed && fpi_device_usb_is_reenumeration_expected (existing))
+    {
+      fpi_device_usb_offer_replacement (existing, device);
+      return;
+    }
+
+  /* An independent new instance while the old one is still live: retire the
+   * old FpDevice and queue the candidate until its entry is gone. */
+  if (!removed)
+    fpi_device_remove (existing);
+
+  queue_pending_usb_add (self, device);
+}
+
+static void
+usb_device_removed_cb (FpContext *self, GUsbDevice *device, GUsbContext *usb_ctx)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (self);
+  gint i;
+
+  /* A candidate that left before the old entry was published must never be
+   * published at all. */
+  drop_pending_usb_device (self, device);
+
+  /* Route by the current core object: a late removal of an already retired
+   * re-enumeration object is not a removal of the current binding. */
+  for (i = 0; i < priv->devices->len; i++)
+    {
+      FpDevice *dev = g_ptr_array_index (priv->devices, i);
+      FpDeviceClass *cls = FP_DEVICE_GET_CLASS (dev);
+
+      if (cls->type != FP_DEVICE_TYPE_USB)
+        continue;
+
+      if (fpi_device_get_usb_device (dev) != device)
+        continue;
+
+      if (fpi_device_usb_is_reenumeration_expected (dev))
+        fpi_device_usb_note_departure (dev);
+      else
+        fpi_device_remove (dev);
+    }
+}
+
+static void
+discover_usb_device (FpContext *self, GUsbDevice *device)
 {
   FpContextPrivate *priv = fp_context_get_instance_private (self);
   GType found_driver = G_TYPE_NONE;
@@ -260,34 +445,6 @@ usb_device_added_cb (FpContext *self, GUsbDevice *device, GUsbContext *usb_ctx)
 }
 
 static void
-usb_device_removed_cb (FpContext *self, GUsbDevice *device, GUsbContext *usb_ctx)
-{
-  FpContextPrivate *priv = fp_context_get_instance_private (self);
-  gint i;
-
-  /* Do the lazy way and just look at each device. */
-  for (i = 0; i < priv->devices->len; i++)
-    {
-      FpDevice *dev = g_ptr_array_index (priv->devices, i);
-      FpDeviceClass *cls = FP_DEVICE_GET_CLASS (dev);
-
-      if (cls->type != FP_DEVICE_TYPE_USB)
-        continue;
-
-      if (fpi_device_get_usb_device (dev) == device)
-        {
-          /* A device that resets itself leaves the bus without being removed;
-           * drivers announce that window.  Only a departure nobody expects is a
-           * real removal. */
-          if (fpi_device_usb_is_reenumeration_expected (dev))
-            continue;
-
-          fpi_device_remove (dev);
-        }
-    }
-}
-
-static void
 fp_context_finalize (GObject *object)
 {
   FpContext *self = (FpContext *) object;
@@ -296,6 +453,7 @@ fp_context_finalize (GObject *object)
   g_cancellable_cancel (priv->cancellable);
   g_clear_object (&priv->cancellable);
   g_clear_pointer (&priv->drivers, g_array_unref);
+  g_clear_pointer (&priv->pending_usb_adds, g_ptr_array_unref);
   g_clear_pointer (&priv->devices, g_ptr_array_unref);
 
   g_slist_free_full (g_steal_pointer (&priv->sources), (GDestroyNotify) g_source_destroy);
@@ -381,6 +539,8 @@ fp_context_init (FpContext *self)
     }
 
   priv->devices = g_ptr_array_new_with_free_func (g_object_unref);
+  priv->pending_usb_adds = g_ptr_array_new_with_free_func (
+    (GDestroyNotify) pending_usb_add_free);
 
   priv->cancellable = g_cancellable_new ();
   priv->usb_ctx = g_usb_context_new (&error);
@@ -601,4 +761,21 @@ fp_context_get_devices (FpContext *context)
   fp_context_enumerate (context);
 
   return priv->devices;
+}
+
+/*
+ * fpi_context_get_usb_context:
+ * @context: a #FpContext
+ *
+ * Return the borrowed #GUsbContext of @context.  Only for the offline
+ * hotplug fixture; there is deliberately no public ABI for this.
+ */
+GUsbContext *
+fpi_context_get_usb_context (FpContext *context)
+{
+  FpContextPrivate *priv = fp_context_get_instance_private (context);
+
+  g_return_val_if_fail (FP_IS_CONTEXT (context), NULL);
+
+  return priv->usb_ctx;
 }

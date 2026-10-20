@@ -97,6 +97,8 @@ typedef enum
   FPC_DISUM_TLS_ERROR_HANDSHAKE,
   /* Memory BIO failure; no TLS state was advanced. */
   FPC_DISUM_TLS_ERROR_IO,
+  /* The peer sent close_notify: the channel is closed, not merely empty. */
+  FPC_DISUM_TLS_ERROR_CLOSED,
 } FpcDisumTlsStatus;
 
 typedef struct _FpcDisumTls FpcDisumTls;

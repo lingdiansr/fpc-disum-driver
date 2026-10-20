@@ -395,9 +395,14 @@ test('fpc-disum-session',
 # test or run automatically.  It only exists where the driver is built in.
 if 'fpc_disum' in drivers
     executable('fpc-disum-hw-probe',
-        files('../tools/fpc_disum_hw_probe.c'),
-        dependencies: [libfprint_dep, gio_dep, glib_dep],
-        include_directories: [include_directories('.'), include_directories('../libfprint')],
+        files('../tools/fpc_disum_hw_probe.c', '../tools/fpc_disum_probe_support.c'),
+        dependencies: [libfprint_dep, gio_dep, glib_dep, json_glib_dep,
+                       cc.find_library('dl', required: false)],
+        include_directories: [
+            include_directories('.'),
+            include_directories('../libfprint'),
+            include_directories('../libfprint/drivers/fpc_disum'),
+        ],
         c_args: common_cflags,
         install: false,
     )
@@ -413,6 +418,95 @@ fpc_disum_error_test = executable('test-fpc-disum-error',
 
 test('fpc-disum-error',
     fpc_disum_error_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
+fpc_disum_usb_test = executable('test-fpc-disum-usb',
+    sources: [
+        'test-fpc-disum-usb.c',
+        'test-device-fake-usb.c',
+        '../libfprint/drivers/fpc_disum/fpc_disum_usb.c',
+    ],
+    dependencies: [libfprint_private_dep, fpc_disum_dep, libusb_dep, json_glib_dep],
+    include_directories: [
+        include_directories('.'),
+        include_directories('../libfprint'),
+        include_directories('../libfprint/drivers/fpc_disum'),
+    ],
+    link_args: [
+        '-Wl,--wrap=libusb_init',
+        '-Wl,--wrap=libusb_exit',
+        '-Wl,--wrap=libusb_get_device_list',
+        '-Wl,--wrap=libusb_free_device_list',
+        '-Wl,--wrap=libusb_ref_device',
+        '-Wl,--wrap=libusb_unref_device',
+        '-Wl,--wrap=libusb_get_device_descriptor',
+        '-Wl,--wrap=libusb_get_bus_number',
+        '-Wl,--wrap=libusb_get_device_address',
+        '-Wl,--wrap=libusb_get_port_numbers',
+        '-Wl,--wrap=libusb_open',
+        '-Wl,--wrap=libusb_close',
+        '-Wl,--wrap=libusb_get_configuration',
+        '-Wl,--wrap=libusb_claim_interface',
+        '-Wl,--wrap=libusb_release_interface',
+        '-Wl,--wrap=libusb_alloc_transfer',
+        '-Wl,--wrap=libusb_free_transfer',
+        '-Wl,--wrap=libusb_submit_transfer',
+        '-Wl,--wrap=libusb_cancel_transfer',
+        '-Wl,--wrap=libusb_get_pollfds',
+        '-Wl,--wrap=libusb_free_pollfds',
+        '-Wl,--wrap=libusb_set_pollfd_notifiers',
+        '-Wl,--wrap=libusb_get_next_timeout',
+        '-Wl,--wrap=libusb_handle_events_timeout_completed',
+        '-Wl,--wrap=g_usb_device_is_emulated',
+    ],
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-usb',
+    fpc_disum_usb_test,
+    suite: ['unit-tests', 'protocol'],
+    env: envs,
+)
+
+fp_context_usb_test = executable('test-fp-context-usb',
+    sources: [
+        'test-fp-context-usb.c',
+        'test-device-fake-usb.c',
+        '../libfprint/fp-context.c',
+    ],
+    dependencies: [libfprint_private_dep, json_glib_dep, dependency('gusb', version: '>= 0.4')],
+    include_directories: [
+        include_directories('.'),
+        include_directories('../libfprint'),
+    ],
+    link_args: ['-Wl,--export-dynamic'],
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fp-context-usb',
+    fp_context_usb_test,
+    suite: ['unit-tests', 'context-usb'],
+    env: envs,
+)
+
+fpc_disum_probe_test = executable('test-fpc-disum-probe',
+    sources: ['test-fpc-disum-probe.c', '../tools/fpc_disum_probe_support.c'],
+    dependencies: [libfprint_private_dep, fpc_disum_dep, json_glib_dep],
+    include_directories: [
+        include_directories('.'),
+        include_directories('../libfprint'),
+        include_directories('../libfprint/drivers/fpc_disum'),
+    ],
+    c_args: common_cflags,
+    install: false,
+)
+
+test('fpc-disum-probe',
+    fpc_disum_probe_test,
     suite: ['unit-tests', 'protocol'],
     env: envs,
 )
