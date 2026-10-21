@@ -77,7 +77,7 @@
 ## M0.1：LLVM 质量工具（已完成）
 
 - [x] 修复已复现的虚拟图像驱动与原生测试回调签名，不改变公共/内部 API，不通过强转或关闭 sanitizer 掩盖问题。
-- [x] 使用 `dev/native/common.ini`、`llvm.ini`、`gcc.ini`、`sanitizers.ini` 定义三套独立 Meson 构建；保留 GNU C99 和原有虚拟驱动安全范围。
+- [x] 使用系统 Meson 加 `dev/native/common.ini`、`llvm.ini`、`gcc.ini`、`sanitizers.ini` 定义独立构建；保留 GNU C99 和原有虚拟驱动安全范围，不再依赖 uv/项目内 Meson 包装。
 - [x] `.clangd` 使用 LLVM 开发构建的编译数据库；`.clang-format` 仅复刻 GNU/uncrustify 风格以约束自动格式化，uncrustify 仍是唯一权威格式规范。
 - [x] `.clang-tidy` 及 `.clang-tidy-include` 检查新增驱动代码和本轮修正的源文件；使用 Meson 生成的 Ninja 原生分析目标，不自动应用修复。
 - [x] sanitizer 测试默认在首个 UBSan 错误处失败，保留全部 `address,undefined` 检查，不增加 suppression。
