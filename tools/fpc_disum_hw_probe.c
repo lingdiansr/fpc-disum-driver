@@ -221,36 +221,50 @@ image_ncc (const FpImage *a, const FpImage *b)
       || height != fp_image_get_height ((FpImage *)b))
     return -2.0;
 
-  for (gint dy = -6; dy <= 6; dy++)
-    for (gint dx = -6; dx <= 6; dx++)
-      {
-        gdouble sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
+  for (gint angle = -30; angle <= 30; angle += 10)
+    {
+      gdouble rad = angle * M_PI / 180.0;
+      gdouble c = cos (rad), s = sin (rad);
+      gdouble cx = (width - 1) / 2.0, cy = (height - 1) / 2.0;
 
-        for (guint y = MAX (0, -dy); y < MIN ((gint)height, (gint)height - dy); y++)
-          for (guint x = MAX (0, -dx); x < MIN ((gint)width, (gint)width - dx); x++)
-            {
-              gdouble va = da[y * width + x];
-              gdouble vb = db[(y + dy) * width + (x + dx)];
-
-              sa += va;
-              sb += vb;
-              saa += va * va;
-              sbb += vb * vb;
-              sab += va * vb;
-              n += 1.0;
-            }
-
-        if (n > 0)
+      for (gint dy = -6; dy <= 6; dy++)
+        for (gint dx = -6; dx <= 6; dx++)
           {
-            gdouble cov = sab - sa * sb / n;
-            gdouble va = saa - sa * sa / n;
-            gdouble vb = sbb - sb * sb / n;
-            gdouble denom = sqrt (MAX (va * vb, 0.0));
+            gdouble sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
 
-            if (denom > 0 && cov / denom > best)
-              best = cov / denom;
+            for (guint y = 0; y < height; y++)
+              for (guint x = 0; x < width; x++)
+                {
+                  gdouble rx = (x - cx) * c - (y - cy) * s + cx + dx;
+                  gdouble ry = (x - cx) * s + (y - cy) * c + cy + dy;
+                  gint ix = (gint)lround (rx), iy = (gint)lround (ry);
+                  gdouble va, vb;
+
+                  if (ix < 0 || ix >= (gint)width || iy < 0 || iy >= (gint)height)
+                    continue;
+
+                  va = da[y * width + x];
+                  vb = db[iy * width + ix];
+                  sa += va;
+                  sb += vb;
+                  saa += va * va;
+                  sbb += vb * vb;
+                  sab += va * vb;
+                  n += 1.0;
+                }
+
+            if (n > 0)
+              {
+                gdouble cov = sab - sa * sb / n;
+                gdouble va = saa - sa * sa / n;
+                gdouble vb = sbb - sb * sb / n;
+                gdouble denom = sqrt (MAX (va * vb, 0.0));
+
+                if (denom > 0 && cov / denom > best)
+                  best = cov / denom;
+              }
           }
-      }
+    }
 
   return best;
 }
