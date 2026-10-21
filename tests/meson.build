@@ -396,7 +396,7 @@ test('fpc-disum-session',
 if 'fpc_disum' in drivers
     executable('fpc-disum-hw-probe',
         files('../tools/fpc_disum_hw_probe.c', '../tools/fpc_disum_probe_support.c'),
-        dependencies: [libfprint_dep, gio_dep, glib_dep, json_glib_dep,
+        dependencies: [libfprint_dep, gio_dep, glib_dep, json_glib_dep, mathlib_dep,
                        cc.find_library('dl', required: false)],
         include_directories: [
             include_directories('.'),

@@ -27,6 +27,7 @@
 #define _GNU_SOURCE
 
 #include <dlfcn.h>
+#include <math.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -98,6 +99,7 @@ typedef struct
 
 static FpcDisumProbeOutput *probe_output;
 static gboolean output_broken;
+static gboolean correlate_images;
 
 static ProbePhase current_phase;
 static GCancellable *current_cancellable;
@@ -201,6 +203,56 @@ cue_operator (void)
 
   spawn_notification (notify_argv, "notify-send");
   spawn_notification (bell_argv, "canberra-gtk-play");
+}
+
+/* Diagnostic-only normalized cross-correlation with a small translation
+ * search.  It compares two in-memory planes and never stores them. */
+static gdouble
+image_ncc (const FpImage *a, const FpImage *b)
+{
+  gsize la = 0, lb = 0;
+  const guint8 *da = fp_image_get_data ((FpImage *)a, &la);
+  const guint8 *db = fp_image_get_data ((FpImage *)b, &lb);
+  guint width = fp_image_get_width ((FpImage *)a);
+  guint height = fp_image_get_height ((FpImage *)a);
+  gdouble best = -2.0;
+
+  if (la != lb || width != fp_image_get_width ((FpImage *)b)
+      || height != fp_image_get_height ((FpImage *)b))
+    return -2.0;
+
+  for (gint dy = -6; dy <= 6; dy++)
+    for (gint dx = -6; dx <= 6; dx++)
+      {
+        gdouble sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
+
+        for (guint y = MAX (0, -dy); y < MIN ((gint)height, (gint)height - dy); y++)
+          for (guint x = MAX (0, -dx); x < MIN ((gint)width, (gint)width - dx); x++)
+            {
+              gdouble va = da[y * width + x];
+              gdouble vb = db[(y + dy) * width + (x + dx)];
+
+              sa += va;
+              sb += vb;
+              saa += va * va;
+              sbb += vb * vb;
+              sab += va * vb;
+              n += 1.0;
+            }
+
+        if (n > 0)
+          {
+            gdouble cov = sab - sa * sb / n;
+            gdouble va = saa - sa * sa / n;
+            gdouble vb = sbb - sb * sb / n;
+            gdouble denom = sqrt (MAX (va * vb, 0.0));
+
+            if (denom > 0 && cov / denom > best)
+              best = cov / denom;
+          }
+      }
+
+  return best;
 }
 
 /* ------------------------------------------------------------ round state */
@@ -675,6 +727,15 @@ multi_capture (FpDevice *device, guint captures, ProbeRoundResult *results, gsiz
   cleanup_ok = close.have_cleanup && !close.cleanup_failed;
   cleanup_text = !close.have_cleanup ? "missing" : (cleanup_ok ? "ok" : "failed");
 
+  if (correlate_images && images >= 2)
+    {
+      for (guint i = 0; i < images; i++)
+        for (guint j = i + 1; j < images; j++)
+          if (results[i].image != NULL && results[j].image != NULL)
+            printf ("correlation: %u/%u %.3f\n", i + 1, j + 1,
+                image_ncc (results[i].image, results[j].image));
+    }
+
   printf ("multi-capture: images=%u/%u cleanup=%s\n", images, captures, cleanup_text);
   fflush (stdout);
 
@@ -895,7 +956,8 @@ print_usage (FILE *stream, const gchar *program)
       "usage: %s <list|negative|capture|cancel|cancel-reopen|reopen|multi-capture>"
       " [--captures N] [--cancel-after-ms N] [--pressed-after-cue yes|no|unknown]"
       " [--held-until-end yes|no|unknown] [--output-dir PATH]\n"
-      "  multi-capture: one open, N image rounds, one close (default N=%d, range 1..%d)\n",
+      "  multi-capture: one open, N image rounds, one close (default N=%d, range 1..%d)\n"
+      "  --correlate: print pairwise normalized correlation for multi-capture\n",
       program, PROBE_DEFAULT_CAPTURES, PROBE_MAX_CAPTURES);
 }
 
@@ -1102,6 +1164,12 @@ main (int argc, char **argv)
             operator_pressed = value;
           else
             operator_held = value;
+          continue;
+        }
+
+      if (g_strcmp0 (argv[i], "--correlate") == 0)
+        {
+          correlate_images = TRUE;
           continue;
         }
 
