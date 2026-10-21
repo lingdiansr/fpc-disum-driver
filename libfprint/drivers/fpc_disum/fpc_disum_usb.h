@@ -5,6 +5,10 @@
  * frames and cross-packet aggregation), §6 step 4 (handle swap after CMD_INIT),
  * §16.2 (USB error handling).
  *
+ * The reader lifecycle contract (start before CMD_INIT, queue across the reset,
+ * reap before the handle swap, restart before the reopen callback) is documented
+ * in docs/IMPLEMENTATION_REQUIREMENTS.md §2.
+ *
  * This file is part of libfprint.
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */

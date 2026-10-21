@@ -239,7 +239,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 > **2026-10-21 完成记录（优先于下方历史轮次）**
 >
-> **根因与修复**：初始化/重枚举期间没有持续读 bulk，设备复位的 `EVT_INIT_RESULT` 被丢弃；该偏差单独即可造成 ARM 后零上报（[`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §2）。后端已改为在 `CMD_INIT` 前启动连续读 URB，跨复位保留帧；reopen 等旧读自然结束（2.5 s 有界 grace），新 handle claim 后先重启读再完成回调。
+> **根因与修复**：初始化/重枚举期间没有持续读 bulk，设备复位的 `EVT_INIT_RESULT` 被丢弃；该偏差单独即可造成 ARM 后零上报（[`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §2；逐阶段契约见 §2.1）。后端已改为在 `CMD_INIT` 前启动连续读 URB，跨复位保留帧；reopen 等旧读自然结束（2.5 s 有界 grace），新 handle claim 后先重启读再完成回调。
 >
 > **真机验收（全部 exit 0，cleanup 完成）**：
 >
@@ -253,7 +253,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 >
 > **离线**：llvm / gcc / sanitizers / device 四 profile 均 cleanroom 4/4、驱动与核心 12/12；USB smoke 通过。
 >
-> **支持范围/未支持项/偏离**：见 [`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §6。M6 声明范围外的录入/模板匹配已由 M7.2 的 SIGFM 路径在 in-process 探针中验证（见 M7.2）；fprintd/PAM、同会话第二次采集、异常复位恢复、其他设备/固件、DFU 与上游接受度仍未验证。
+> **支持范围/未支持项/偏离**：见 [`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §6。M6 声明范围外的录入/模板匹配已由 M7.2 的 SIGFM 路径在 in-process 探针中验证（见 M7.2）；系统 fprintd/PAM/桌面、同会话第二次采集、异常复位恢复、其他设备/固件、DFU 与上游接受度仍未验证。
 >
 > 下方 2026-10-18 的验证回顾与各轮记录保留为历史，其中“根因未定/失败点不在驱动侧/不得宣称 M6 通过”的结论已被本轮证据取代。
 
@@ -471,21 +471,21 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 - [x] **NBIS 评估**：112×88 图像只有 1 个 verify 细节点、3–5 个模板细节点；BZ3 全部 0/40。NBIS 硬门 `MIN_COMPUTABLE_BOZORTH_MINUTIAE=10` 在低于 10 时直接返回 0，调阈值无效。
 - [x] **替换 matcher**：接入 SIGFM（OpenCV SIFT + ratio + 几何一致性），`score_threshold=10`；新增 `enroll_coverage_shift=12` 的覆盖引导注册。
-- [ ] `fprintd-enroll`：通过 daemon 完成默认 5 段采集；失败轮可重试，取消可恢复。
-- [ ] `fprintd-verify`：同一手指成功、不同手指失败；连续 3 次 enroll→verify 可重复。
+- [x] `fprintd-enroll`：隔离 fprintd daemon 完成 5 段采集；覆盖重试有效；取消/重启后仍可 list。
+- [x] `fprintd-verify`：隔离 daemon 同指 `verify-match`（SIGFM 36/10），左手拇指 `verify-no-match`（5 个模板均 0/10）。
 - [ ] `fprintd-identify`：至少两个已录入 print 中选择正确者；不匹配时失败而非误报。
-- [ ] `fprintd-list` / `fprintd-delete`：主机侧存储的 print 可列出、删除、重录。
+- [x] `fprintd-list` / `fprintd-delete`：隔离 daemon 可列出、删除；删除后回到空存储。
 - [ ] 记录 FRR/FAR 的粗略样本（不是安全认证结论），至少覆盖成功/失败/重试。
 
 **完成判据**：enroll/verify/identify 在目标设备上可重复通过；失败路径不产生假成功；阈值与图像质量有记录。
 
-**2026-10-21 实现与真机**：覆盖引导下注册 **5/5**（太近/无重叠会重试且不消耗阶段），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=true**。`examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；随后修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败。仍需 fprintd/PAM 端到端、identify 多模板与打包回归。
+**2026-10-21 实现与真机**：覆盖引导下注册 **5/5**（太近/无重叠会重试且不消耗阶段），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=true**。`examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；随后修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败。仍需系统 fprintd/PAM/桌面端到端、identify 多模板与打包回归。
 
 **历史依据**：NBIS 阈值、NCC 相关性和 8 轮扩样本的失败记录已被 SIGFM 实现取代，保留在 git 历史（commit `5ac0648`、`70adc30`、`b0d9391`）；不再作为当前实现路径。
 
 ### M7.3 fprintd daemon 生命周期与系统集成
 
-- [ ] `fprintd` 启动、停止、重启后设备可再次枚举和 open。
+- [x] `fprintd` 启动、停止、重启后设备可再次枚举和 open（私有 D-Bus 隔离环境）。
 - [ ] D-Bus 取消：capture/verify 中途取消，daemon 不挂起，下一动作可用。
 - [ ] suspend/resume、锁屏/解锁后设备可用；必要时补驱动/核心 suspend 处理。
 - [ ] 多用户：不同用户各自 print 存储隔离，设备释放正常。
@@ -493,7 +493,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - [ ] 在一次性测试用户上验证 PAM 登录/解锁；不修改系统默认 PAM 配置。
 - [ ] 异常：daemon 在 capture 中被杀、设备拔出、非预期 reset；不泄漏句柄/密钥，不假成功。
 
-**2026-10-21 无手指 fprintd 冒烟**：`tools/fprintd-nofinger-smoke.sh /tmp/fpc-default-fpc` 使用私有 D-Bus + 测试专用 polkit，通过设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启，共 7 项检查。未触摸的 enroll 超时仍由 fprintd 报 `enroll-unknown-error`，客户端断开时 daemon 记录 `ReleaseDevice`/`CRITICAL`，但设备随后仍可 list 和重启；这是待解决的 fprintd 错误映射/释放路径，不影响“无手指冒烟”结论。成功 enroll/verify 与 PAM 仍未验证。
+**2026-10-21 无手指 fprintd 冒烟**：`tools/fprintd-nofinger-smoke.sh /tmp/fpc-default-fpc` 使用私有 D-Bus + 测试专用 polkit，通过设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启，共 7 项检查。未触摸的 enroll 超时仍由 fprintd 报 `enroll-unknown-error`，客户端断开时 daemon 记录 `ReleaseDevice`/`CRITICAL`，但设备随后仍可 list 和重启；这是待解决的 fprintd 错误映射/释放路径，不影响“无手指冒烟”结论。随后已做有手指隔离测试（fprintd 1.94.5）：5 段 enroll、同指 verify-match（36/10）、左手拇指 verify-no-match（0/10）、list/delete；PAM/桌面登录仍未验证。
 
 ### M7.4 失败、取消与安全边界
 
@@ -507,7 +507,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 ### M7.5 支持范围更新
 
-- [ ] 将 M7 结果写回 `docs/IMPLEMENTATION_REQUIREMENTS.md`，区分“libfprint in-process”与“fprintd/PAM 端到端”。
+- [x] 将 M7 结果写回 `docs/IMPLEMENTATION_REQUIREMENTS.md`，区分“libfprint in-process”“隔离 fprintd”与“系统 PAM/桌面端到端”。
 - [ ] 列出已验证的 fprintd 版本、设备/固件、未支持项。
 - [ ] M7 未全部通过前，M8 的发布产物只能标记 experimental，不得描述为生产可用。
 
@@ -515,7 +515,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 ## M8：CI/CD 与发布工程（下游打包不在本仓库）
 
-> **前置**：M7.2 的 in-process 路径已验证；fprintd/PAM 未完成。AUR、发行版包、PAM 策略和系统库替换由下游维护，本仓库不创建 PKGBUILD，也不发布替换系统 `libfprint` 的包。
+> **前置**：M7.2 的 in-process 与隔离 fprintd 路径已验证；系统 PAM/桌面未完成。AUR、发行版包、PAM 策略和系统库替换由下游维护，本仓库不创建 PKGBUILD，也不发布替换系统 `libfprint` 的包。
 
 **目标**：用可复现的 CI 构建、测试和源码发布替代手工打包；硬件验收保持手动。
 
@@ -541,7 +541,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 - [ ] 版本号、changelog、支持范围、已知限制、回滚说明随源码归档发布。
 - [ ] 发布前完成一次手动硬件冒烟（采集、取消/重开、SIGFM 注册/验证）；结果写入 release notes，不进入 CI。
-- [ ] 源码归档可复现；发布说明明确“fprintd/PAM 未验证”和“不得用于生产认证”。
+- [ ] 源码归档可复现；发布说明明确“系统 fprintd/PAM/桌面未验证”和“不得用于生产认证”。
 - [ ] 不发布 AUR/发行版包；下游打包必须自行声明源、版本、依赖和回滚方式。
 
 **完成判据**：release 资产只含源码、校验和与证据摘要；无系统包或二进制替换物。
@@ -559,7 +559,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - **CI 无硬件**：自动测试只能证明编译、协议/状态机和 cleanroom 向量，不能证明真实采集或匹配成功率。
 - **OpenCV 依赖**：SIGFM 增加 C++/OpenCV 依赖；不满足时构建失败关闭。
 - **下游打包差异**：AUR/发行版可能使用不同 soname、fprintd 版本或 PAM 配置；本仓库不为其行为背书。
-- **fprintd/PAM 未验证**：这是当前最大功能风险，不能用 in-process 结果替代端到端验收。
+- **系统 fprintd/PAM/桌面未验证**：这是当前最大功能风险，不能用隔离 fprintd/in-process 结果替代系统端到端验收。
 
 ## 开发规则
 

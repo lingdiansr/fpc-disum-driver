@@ -4,7 +4,7 @@
 
 Linux `libfprint` 驱动，支持 **FPC Disum** 指纹传感器（`10a5:9201`），即基于 FPC1022 的 112×88 按压式传感器。本仓库是 `libfprint` 的派生源码树，不是独立守护进程。
 
-> **状态：实验性。** 在已验证设备上，in-process `libfprint` 的注册/验证可配合 SIGFM 工作；**fprintd/PAM 登录尚未完成端到端验证**。不要在未理解风险的情况下用它替换系统的 `libfprint` 来做日常认证。
+> **状态：实验性。** 在已验证设备上，in-process `libfprint` 以及**隔离的 fprintd daemon** 的注册/验证/list/delete 已通过；**系统 fprintd/PAM/桌面登录尚未完成端到端验证**。不要在未理解风险的情况下用它替换系统的 `libfprint` 来做日常认证。
 
 ## 设备支持
 
@@ -88,7 +88,7 @@ LD_LIBRARY_PATH="$PWD/_build/libfprint" \
 tools/fprintd-nofinger-smoke.sh /path/to/build
 ```
 
-需要 `fprintd`、`dbus-run-session`、`busctl` 和 Python PyGObject；覆盖设备枚举、空存储、无 print 删除、无 print verify、enroll 取消和 daemon 重启。成功 enroll/verify 与 PAM 仍属于硬件/手动测试。
+需要 `fprintd`、`dbus-run-session`、`busctl` 和 Python PyGObject；覆盖设备枚举、空存储、无 print 删除、无 print verify、enroll 取消和 daemon 重启。成功 enroll/verify 需要手指，属于手动测试；PAM/桌面集成仍未验证。
 
 ## 安装与打包
 
@@ -118,8 +118,8 @@ tests/                         离线协议、状态机与净室测试
 
 ## 状态与限制
 
-- 单设备 in-process 结果：覆盖引导注册 5/5，同指验证 3/3，异指验证 0/3。样本很小，不构成安全结论。
-- `fprintd`/PAM 登录、多模板 `fprintd-identify`、多用户存储、suspend/resume 与 daemon 生命周期仍未验证。
+- 单设备 in-process 结果：覆盖引导注册 5/5，同指验证 3/3，异指验证 0/3。隔离 fprintd：5 段注册、同指 `verify-match`（SIGFM 36/10）、左手拇指 `verify-no-match`（所有模板 0/10）、list/delete 通过。样本很小，不构成安全结论。
+- 系统 fprintd/PAM/桌面登录、多模板 `fprintd-identify`、多用户存储、suspend/resume 与完整 daemon 生命周期仍未验证。
 - 小面积传感器每次按压的重叠区域有限，误拒率可能高于全尺寸传感器。
 - SIGFM 模板包含可从图像重建的特征。请把存储的模板和任何采集图像视为生物识别敏感数据。
 
