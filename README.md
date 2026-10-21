@@ -82,6 +82,14 @@ LD_LIBRARY_PATH="$PWD/_build/libfprint" \
 
 The probes write de-sensitised JSONL only; they do not store images, keys, TLS payloads or raw bus captures.
 
+No-finger fprintd smoke (private D-Bus bus, test-only polkit, no system changes, no finger):
+
+```sh
+tools/fprintd-nofinger-smoke.sh /path/to/build
+```
+
+It requires `fprintd`, `dbus-run-session`, `busctl` and Python PyGObject; it covers enumeration, empty storage, delete-with-no-prints, verify-without-print, enrollment cancellation and daemon restart. Successful enroll/verify and PAM remain hardware/manual tests.
+
 ## Install and packaging
 
 This project ships source and CI build/test artifacts. **AUR and distribution packaging are maintained downstream, not in this repository**; there is no package script here that replaces system `libfprint`.

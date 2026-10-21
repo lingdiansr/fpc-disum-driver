@@ -82,6 +82,14 @@ LD_LIBRARY_PATH="$PWD/_build/libfprint" \
 
 探针只写去敏 JSONL，不保存图像、密钥、TLS 载荷或原始总线抓包。
 
+无手指 fprintd 冒烟（私有 D-Bus、测试专用 polkit，不改系统、不需按压）：
+
+```sh
+tools/fprintd-nofinger-smoke.sh /path/to/build
+```
+
+需要 `fprintd`、`dbus-run-session`、`busctl` 和 Python PyGObject；覆盖设备枚举、空存储、无 print 删除、无 print verify、enroll 取消和 daemon 重启。成功 enroll/verify 与 PAM 仍属于硬件/手动测试。
+
 ## 安装与打包
 
 本仓库提供源码和 CI 构建/测试产物。**AUR 和发行版打包由下游维护，不在本仓库内进行**；这里没有替换系统 `libfprint` 的打包脚本。

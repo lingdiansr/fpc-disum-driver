@@ -75,6 +75,7 @@
 | 同指 verify | 3/3 `match=true` |
 | 异指 verify | 0/3 `match=true` |
 | SIGFM print 存储 | 写入/读取后曾成功 MATCH；`fp_print_equal` 的 SIGFM 分支已修 |
+| fprintd 无手指冒烟 | 设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启均通过；成功 enroll/verify 与 PAM 未测 |
 | 离线用例 | 17 通过、32 跳过、0 失败 |
 
 这些是 in-process libfprint 结果，不是 fprintd/PAM 认证结论。复现命令与 run_id 见 `ROADMAP.md`。

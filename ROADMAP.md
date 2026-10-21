@@ -493,7 +493,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - [ ] 在一次性测试用户上验证 PAM 登录/解锁；不修改系统默认 PAM 配置。
 - [ ] 异常：daemon 在 capture 中被杀、设备拔出、非预期 reset；不泄漏句柄/密钥，不假成功。
 
-**完成判据**：上述生命周期逐项有可复现步骤与结果；PAM 只在隔离环境验证。
+**2026-10-21 无手指 fprintd 冒烟**：`tools/fprintd-nofinger-smoke.sh /tmp/fpc-default-fpc` 使用私有 D-Bus + 测试专用 polkit，通过设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启，共 7 项检查。未触摸的 enroll 超时仍由 fprintd 报 `enroll-unknown-error`，客户端断开时 daemon 记录 `ReleaseDevice`/`CRITICAL`，但设备随后仍可 list 和重启；这是待解决的 fprintd 错误映射/释放路径，不影响“无手指冒烟”结论。成功 enroll/verify 与 PAM 仍未验证。
 
 ### M7.4 失败、取消与安全边界
 
