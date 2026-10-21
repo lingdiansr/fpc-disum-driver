@@ -15,8 +15,11 @@ Linux `libfprint` driver for the **FPC Disum** fingerprint sensor (`10a5:9201`),
 | Firmware tested | `021.26.2.050` |
 | Sensor | FPC1022 module, 112×88, 8-bit, press |
 | Transport | vendor USB control + `0x82` bulk IN, TLS-PSK |
+| Tested host | XIAOMI Redmi Book 14, board `TM2205` (SKU `TM2205-56978`), built-in sensor |
 
 Only this device/firmware combination is covered. Other FPC IDs, other firmware, DFU, abnormal-reset recovery and the unknown `0x64` command are **not** supported.
+
+Development and validation were performed on the host above (BIOS `RMAAD4B1P0808`, CachyOS / Linux 7.2.11, built-in sensor). The driver targets the sensor, not the laptop model; other hosts and modules are untested.
 
 ## Features
 
