@@ -246,8 +246,8 @@ print_driver (const FpDeviceClass *cls)
       if (g_hash_table_lookup (printed, key) != NULL)
         {
           if (cls == &allowlist)
-            g_warning ("%s implemented by driver %s",
-                       key, (const char *) g_hash_table_lookup (printed, key));
+            g_debug ("%s implemented by driver %s; skipping allowlist entry",
+                     key, (const char *) g_hash_table_lookup (printed, key));
           g_free (key);
           continue;
         }

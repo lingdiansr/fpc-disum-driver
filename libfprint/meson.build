@@ -392,7 +392,7 @@ udev_hwdb_list_updater = custom_target('udev-hwdb-list-updater',
 )
 
 run_target('sync-udev-hwdb',
-    depends: udev_hwdb_list_updater,
+    depends: [udev_hwdb_generator, udev_hwdb_list_updater],
     command: [
         'cp', '-v',
         udev_hwdb_generator.full_path(),
