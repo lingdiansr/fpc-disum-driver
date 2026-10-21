@@ -54,7 +54,7 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M5 已完成；M6 单次采集已在真机通过，但完整 M6 仍未闭合。** 2026-10-20 修复了初始化读取缺口：bulk reader 在 `CMD_INIT` 前启动，并跨重枚举持续排空。真机初始化收到 5 帧 / 247 B（含 `EVT_INIT_RESULT`），按压采集得到 112×88 / 9856 B 合法图像（17 帧 / 10,878 B，退出码 0）。初始化、TLS、ARM、触摸、取图与清理已有正向证据；**无手指负例、取消、cancel-reopen、close-reopen、录入生命周期尚未在最终 reader 修复后重跑**，发布声明也未完成，因此不得宣称设备已受支持或 M6 已通过。历史失败轮见 ROADMAP M6。
+- **当前状态：M0–M6 已在声明范围内完成。** 2026-10-20 修复初始化读取缺口后，真机已通过：单次采集（初始化 5 帧/247 B，含 `EVT_INIT_RESULT`；17 帧/10,878 B，112×88/9856 B）、无手指负例、取消、取消后再采集、close/reopen 两次采集（两图不同）。支持与未支持范围见 [M6_SUPPORT_DECLARATION.md](M6_SUPPORT_DECLARATION.md)。**这不等于上游 libfprint 接受、PAM/fprintd 可用、录入/模板匹配已验证或异常复位恢复已支持。**
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
