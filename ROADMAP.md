@@ -235,7 +235,23 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 - 主机侧录入按 §16.4 指引由上层重复调用已验证的采集模式实现（框架默认 5 段）；**未在真机验证**，不得宣称录入生命周期已验证。
 - 三个开发配置继续只编译虚拟驱动；新增的 `device` 配置才会编译本驱动，任何会枚举设备的命令在该配置下都可能认领真实传感器，因此它只用于编译与不枚举设备的用例。
 
-## M6：受控真机验收与交付（未通过 —— 触摸事件未交付，根因未定）
+## M6：受控真机验收与交付（部分通过 —— 单次采集已通过；生命周期变体未验证）
+
+> **2026-10-20 现状更新（优先于下方历史轮次）**
+>
+> **根因与修复**：初始化/重枚举期间没有持续读 bulk，设备复位的 `EVT_INIT_RESULT` 被丢弃；该偏差单独即可造成 ARM 后零上报（`M6_INIT_READ_GAP_FINDING.md`）。后端已改为在 `CMD_INIT` 前启动自己的连续读 URB，跨复位保留帧；reopen 不再预取消旧读，而是等设备复位使其自然结束（2.5 s 有界 grace），新 handle claim 后先重启读再完成回调。
+>
+> **真机正向证据**（run `93bd3886-8074-4109-be17-1adeb51fa00d`，`~/fpc-disum-runs/capture-reader-fix-pressed-20261020T162624Z/`）：
+> - 初始化 **5 帧 / 247 B**，含 `EVT_INIT_RESULT(code=2, 38 B)`；
+> - `ARM ok/4 B` → `EVT_FINGER_DWN(code=6, 12 B)` → 10×`EVT_TLS(1009 B)` + `529 B`；
+> - 合计 **17 帧 / 10,878 B**，应用帧像素 **112×88 / 9856 B**，`structure_valid=true`；
+> - `capture_pass=true`、`cleanup_pass=true`、`evidence_complete=true`，退出码 **0**。操作者事后确认“提示后按住到结束”。
+>
+> **离线**：llvm / gcc / sanitizers / device 四个 profile 均为 cleanroom 4/4、驱动与核心 12/12；USB smoke 通过。
+>
+> **仍未验证（不得宣传为支持）**：最终 reader 修复后的无手指负例、超时/取消、`cancel-reopen`、`close-reopen`；录入生命周期；发布声明与支持范围。**M6 尚未整体通过。**
+>
+> 下方 2026-10-18 的验证回顾与各轮记录保留为历史，其中“根因未定/失败点不在驱动侧”的结论已被本轮证据取代。
 
 > **验证回顾更正（2026-10-18，源码基点 `81c03c3`）**：当前结论与交回问题以
 > [`M6_VERIFICATION_REVIEW.md`](M6_VERIFICATION_REVIEW.md) 为准。

@@ -23,7 +23,7 @@ sha256sum -c docs/SHA256SUMS
 
 当前交付对已完成**第17轮显式允许列表、无历史模型文档复核**：支持范围内的流程可据以实现，未发现剩余阻塞性必需参数/规范矛盾；独立生成的合成向量检查器实际执行 **22/22、146 条断言、0 失败**。模型审阅与脚本执行分别记录；不将该结论称为真机验收、法律上的第三方认证或硬件可用性证明。
 > **2026-10-18 M6验证回顾修订**：以 `M6_VERIFICATION_REVIEW.md` 为当前交回依据，逐问答复见 `M6_VERIFICATION_RESPONSE.md`。撤回≥10s必要门槛、固定检测延时、64B持续读取必漏帧、每次初始化必变址及下一轮必恢复等外推；正文补齐timeout+partial、TLS等待态消费、初始化/异常恢复与取消清理边界。**成功轮的人工去敏时序表与未测项已直接放入规格附录C**。
-> 较早两份 `M6_DEVICE_RESET_RESPONSE.md` / `M6_CAPTURE_HANDOFF_RESPONSE.md` 只保留为历史，其顶部已标明被撤回内容；不得混用旧基线。当前`0x64`仍语义未定，净室零触摸根因仍未定位，M6未通过。
+> 较早两份 `M6_DEVICE_RESET_RESPONSE.md` / `M6_CAPTURE_HANDOFF_RESPONSE.md` 只保留为历史，其顶部已标明被撤回内容；不得混用旧基线。当前`0x64`仍语义未定；净室零触摸根因已由下一条的初始化读取缺口定位，M6 仍待生命周期变体验收。
 > **2026-10-20 排查结论（优先看这条）**：`M6_INIT_READ_GAP_FINDING.md` —— 若 bulk reader **在 `CMD_INIT` 之前未启动/未跨重枚举持续读**，`EVT_INIT_RESULT` 会被设备复位丢弃，且该偏差单独即可造成 ARM 后零上报（研究侧单变量真机复现，签名与你们本轮 4 帧/209 B 一致）。建议：reader 必须在 `CMD_INIT` 前启动并跨重枚举持续排空；不要加固定等待或 port reset。
 > **2026-10-20 去敏补充**：`M6_ARM_GATE_NOTE.md` —— `ARM` 是 `EVT_FINGER_DWN` 的必需前提；`ARM` 返回 4 B 不是"已武装"确认；`ARM` 时机（2–200 ms vs 600 ms）与 `CMD_INIT` 载荷均已被单变量实验排除；"成功一次后必须冷却"无证据。该文件不改变交付包与 `SHA256SUMS`。
 > 说明：`IMPLEMENTATION_REVIEW.md` 是本侧针对**更早基线**（规格 `224aad0b…` / 向量 `a58c6a19…`）写的 CR 文档，
@@ -54,16 +54,16 @@ sha256sum -c docs/SHA256SUMS
 - [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M5 已完成；M6 首次真机验收未通过**：驱动已实现并注册 `fpc_disum` / `10a5:9201`，真机上能被匹配和枚举，但 `open` 在 §6 换句柄之后失败：设备在 `CMD_INIT` 后离开总线重枚举（与 §6 括注冲突，已记录并交回规格侧；另有一个已修的冗余 `SET_CONFIGURATION` 缺陷）。见 ROADMAP M6「首次真机运行记录」。**在修复并通过 M6 全部条目之前，不得宣称设备可用。**
+- **当前状态：M0–M5 已完成；M6 单次采集已在真机通过，但完整 M6 仍未闭合。** 2026-10-20 修复了初始化读取缺口：bulk reader 在 `CMD_INIT` 前启动，并跨重枚举持续排空。真机初始化收到 5 帧 / 247 B（含 `EVT_INIT_RESULT`），按压采集得到 112×88 / 9856 B 合法图像（17 帧 / 10,878 B，退出码 0）。初始化、TLS、ARM、触摸、取图与清理已有正向证据；**无手指负例、取消、cancel-reopen、close-reopen、录入生命周期尚未在最终 reader 修复后重跑**，发布声明也未完成，因此不得宣称设备已受支持或 M6 已通过。历史失败轮见 ROADMAP M6。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_session.c`（单次会话状态机）：§6 初始化序列与 `CMD_INIT` 后换句柄、§8 握手、§4.5 `ARM`→触摸→`GET_IMG`→取图、§16 失败/取消/清理。它只通过 `fpc_disum_transport.h` 的传输边界访问设备，因此可在没有硬件的情况下被合成事件完整验收。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_usb.c`：该边界的 GUsb/FpiUsbTransfer 实现（vendor 控制 OUT/IN、0x82 bulk 读、`CMD_INIT` 后的关句柄/重开/重新 claim、先读当前配置以避免冗余 `SET_CONFIGURATION`）。该文件目前只做静态验证：三套构建下编译通过，设备侧行为需 M6 授权实验。
+- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_usb.c`：私有 libusb-1.0 异步后端。它在工厂阶段启动一条后端自有的 0x82 连续读 URB，跨 `CMD_INIT` 复位与重枚举保留数据；控制传输与读并发，`cancel`/teardown 等待真实完成。`CMD_INIT` 后的句柄重取通过核心显式事务（begin/allow/commit/abort）完成，不发送 `SET_CONFIGURATION`。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum.c`：`FpImageDevice` 适配层（`img_open`/`img_close`/`activate`/`deactivate`/`change_state`）。open 建新会话并跑 §6+§8，取图完成时用真实图像回调上报，close 走 §16.3 清理并释放密码学与传输资源；`usb_discover` 只接受约定固件版本。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_error.c`：会话结果→libfprint 错误映射，取消／窗口到期／USB 失败／协议与安全失败各自成类（规格 §16.2/§16.3 要求可区分）。
-- 真机运行工具：`tools/fpc_disum_hw_probe.c`（仅在手选驱动集时编译；从不注册为测试），负责枚举、无手指负例、单次采图、取消、取消后再开与 close/reopen；日志按 0700/0600 存放，只输出非敏感摘要。
-- 该适配层与核心的交互**无法离线驱动**（上游没有可注入的假 `GUsbDevice`，umockdev 回放承载不了交互式 TLS 握手）：离线验收覆盖会话层与错误映射，适配层由评审 + M6 真机覆盖，详见 ROADMAP M5 的"未验证与范围"。
+- 真机运行工具：`tools/fpc_disum_hw_probe.c`（仅在手选驱动集时编译；从不注册为测试），负责枚举、无手指负例、单次采图、取消、取消后再开与 close/reopen。它把去敏完成记录写成 JSONL、支持非交互式操作者反馈，日志按 0700/0600 存放；不保存真实图像、密钥或 TLS 载荷。
+- 适配层与核心的交互现在有一部分可离线驱动：`test-fp-context-usb` 用人工 GUsb JSON 和 fake USB FpDevice 覆盖核心热插拔/身份路由，`test-fpc-disum-usb` 用链接期 libusb wrap 覆盖真实 USB 后端（含跨重枚举连续读）。完整的 `FpImageDevice` + 真实 libfprint 核心 + 交互式 TLS 组合仍由评审与 M6 真机覆盖，不记作完整离线验证。
 - 上游框架及其他型号驱动不是本传感器的协议来源；原有公开录制测试数据不作为本项目的净室验收输入。
 - Git 本地开发分支为 `main`，上游 remote 为 `upstream`。不自动提交本侧修改，也不执行 push。
 - 本侧对上游的必要构建修正：`tests/meson.build` 的无 GI 分支使用键、值双变量遍历驱动字典，以支持固定版本 Meson 的 C-only 配置；未改变测试行为。
@@ -82,7 +82,7 @@ sha256sum -c docs/SHA256SUMS
 
 上述文件位于 `dev/native/`。三个开发配置只编译虚拟驱动（隔离要求），`device.ini` 额外把它加入驱动集。全部关闭可选 GI/文档/安装测试及 udev 生成，安装前缀固定在本地 `_build/stage`，不替换系统 libfprint/fprintd。
 
-需要 Clang/Clang++、LLD、clang-tidy、GCC/G++、Ninja、pkg-config、GLib ≥2.68、GUsb ≥0.2、OpenSSL ≥3.0；clangd 用于编辑器导航。sanitizer 配置还需要匹配的 Clang runtime。Python ≥3.11 用于基线检查，`uv` 用于运行固定版本 Meson。sccache 可选，不是质量门禁依赖。
+需要 Clang/Clang++、LLD、clang-tidy、GCC/G++、Ninja、pkg-config、GLib ≥2.68、GUsb ≥0.4、libusb-1.0 ≥1.0.22、OpenSSL ≥3.0；clangd 用于编辑器导航。sanitizer 配置还需要匹配的 Clang runtime。Python ≥3.11 用于基线检查，`uv` 用于运行固定版本 Meson。sccache 可选，不是质量门禁依赖。
 
 本机缺少 `g-ir-scanner`，因此这些 C-only 配置不生成 GI 语言绑定；C 库及原生测试仍启用。如需 GI 绑定，先安装对应开发工具，再显式配置 `-Dintrospection=true`，不要把缺少可选工具改成假成功。
 
@@ -111,13 +111,13 @@ uv tool run --from meson==1.12.1 meson setup _build/device \
 ### 构建与同一组离线验收
 
 ```sh
-for profile in llvm sanitizers gcc; do
+for profile in llvm sanitizers gcc device; do
   uv tool run --from meson==1.12.1 meson compile -C "_build/$profile" || exit $?
   uv tool run --from meson==1.12.1 meson test -C "_build/$profile" \
     --suite cleanroom --print-errorlogs || exit $?
   uv tool run --from meson==1.12.1 meson test -C "_build/$profile" \
     fpc-disum-protocol fpc-disum-tls fpc-disum-channel fpc-disum-session \
-    fpc-disum-error \
+    fpc-disum-error fpc-disum-usb fpc-disum-probe fp-context-usb \
     fpi-device fpi-ssm fp-context fp-device \
     --print-errorlogs || exit $?
 done
@@ -129,7 +129,8 @@ done
 uv tool run --from meson==1.12.1 meson compile -C _build/device
 uv tool run --from meson==1.12.1 meson test -C _build/device --suite cleanroom
 uv tool run --from meson==1.12.1 meson test -C _build/device \
-  fpc-disum-protocol fpc-disum-tls fpc-disum-channel fpc-disum-session fpc-disum-error
+  fpc-disum-protocol fpc-disum-tls fpc-disum-channel fpc-disum-session fpc-disum-error \
+  fpc-disum-usb fpc-disum-probe fp-context-usb
 ```
 
 `tools/check-cleanroom.py` 同时核对**源码中固定的已复核哈希**、本地清单及实际文件；只改写 `docs/SHA256SUMS` 不能将未经复核的规格变成有效输入。Meson 配置和 `cleanroom` 测试组均执行该检查。
