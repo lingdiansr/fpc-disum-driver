@@ -406,6 +406,14 @@ if 'fpc_disum' in drivers
         c_args: common_cflags,
         install: false,
     )
+
+    executable('fpc-disum-enroll-probe',
+        files('../tools/fpc_disum_enroll_probe.c'),
+        dependencies: [libfprint_dep, gio_dep, glib_dep],
+        include_directories: [include_directories('.'), include_directories('../libfprint')],
+        c_args: common_cflags,
+        install: false,
+    )
 endif
 
 fpc_disum_error_test = executable('test-fpc-disum-error',

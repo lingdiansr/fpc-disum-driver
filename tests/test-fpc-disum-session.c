@@ -1631,6 +1631,106 @@ test_capture_command_order (void)
 }
 
 static void
+test_multi_capture_five_rounds (void)
+{
+  Fixture fixture;
+  guint init_logs;
+  guint tls_init_logs;
+
+  fixture_setup (&fixture);
+  fixture_init_ok (&fixture);
+
+  init_logs = log_count (fixture.dev, "OUT 01");
+  tls_init_logs = log_count (fixture.dev, "OUT 05");
+  g_assert_cmpuint (init_logs, ==, 1);
+  g_assert_cmpuint (tls_init_logs, ==, 1);
+  g_assert_cmpuint (fixture.dev->init_count, ==, 1);
+
+  for (guint round = 0; round < 5; round++)
+    {
+      /* Every round carries its own plane: a stale image cannot pass. */
+      for (gsize i = 0; i < sizeof fixture.dev->plane; i++)
+        fixture.dev->plane[i] = (guint8)(i * 17 + round * 53 + 3);
+
+      fixture_capture (&fixture);
+
+      g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_OK);
+      g_assert_cmpuint (fixture.capture_calls, ==, round + 1);
+      g_assert_cmpuint (fixture.touch_calls, ==, round + 1);
+      g_assert_cmpuint (fixture.arm_calls, ==, round + 1);
+      assert_image (&fixture);
+      g_assert_false (fixture.dev->get_img_without_touch);
+
+      /* The channel and the session are reused: §6/§8 never run again. */
+      g_assert_cmpuint (log_count (fixture.dev, "OUT 01"), ==, 1);
+      g_assert_cmpuint (log_count (fixture.dev, "OUT 05"), ==, 1);
+      g_assert_cmpuint (fixture.dev->init_count, ==, 1);
+      g_assert_cmpuint (fixture.dev->commit_count, ==, 1);
+    }
+
+  fixture_close (&fixture);
+  g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_OK);
+  g_assert_cmpuint (fixture.close_calls, ==, 1);
+  /* The cleanup of the whole open happens once. */
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 02 v=0001 len=4 p=122f1117"), ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 03"), ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 12"), ==, 1);
+
+  fixture_teardown (&fixture);
+}
+
+static void
+test_multi_capture_third_round_fails (void)
+{
+  Fixture fixture;
+
+  fixture_setup (&fixture);
+  fixture_init_ok (&fixture);
+
+  for (guint round = 0; round < 2; round++)
+    {
+      for (gsize i = 0; i < sizeof fixture.dev->plane; i++)
+        fixture.dev->plane[i] = (guint8)(i * 11 + round * 41 + 5);
+
+      fixture_capture (&fixture);
+
+      g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_OK);
+      g_assert_cmpuint (fixture.capture_calls, ==, round + 1);
+      assert_image (&fixture);
+    }
+
+  /* The third round sees no touch and must not deliver or reuse an image. */
+  fixture.dev->send_finger_down = FALSE;
+  fixture.image_len = 0;
+
+  fixture_capture (&fixture);
+
+  g_assert_cmpint (fixture.capture_status, ==, FPC_DISUM_SESSION_ERROR_NO_TOUCH);
+  g_assert_cmpuint (fixture.capture_calls, ==, 3);
+  g_assert_cmpuint (fixture.image_len, ==, 0);
+  /* Only the two completed rounds ever sent GET_IMG. */
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 09"), ==, 2);
+  g_assert_false (fixture.dev->get_img_without_touch);
+  /* A failure is not a reason to reinitialise. */
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 01"), ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 05"), ==, 1);
+
+  /* One close for the open, and it still runs the reviewed cleanup once.  The
+   * close report keeps the round's first cause, so its status is NO_TOUCH. */
+  fixture_close (&fixture);
+  g_assert_cmpint (fixture.close_status, ==, FPC_DISUM_SESSION_ERROR_NO_TOUCH);
+  g_assert_cmpuint (fixture.close_calls, ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 02 v=0001 len=4 p=122f1117"), ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 03"), ==, 1);
+  g_assert_cmpuint (log_count (fixture.dev, "OUT 12"), ==, 1);
+  g_assert_cmpstr (fixture_find_cleanup (&fixture, CMD_ARM)->cleanup_result, ==, "ok");
+  g_assert_cmpstr (fixture_find_cleanup (&fixture, CMD_ABORT)->cleanup_result, ==, "ok");
+  g_assert_cmpstr (fixture_find_cleanup (&fixture, CMD_SESSION_OFF)->cleanup_result, ==, "ok");
+
+  fixture_teardown (&fixture);
+}
+
+static void
 test_arm_short_completion (void)
 {
   Fixture fixture;
@@ -2798,6 +2898,9 @@ main (int argc, char **argv)
   g_test_add_func ("/session/init-get-tls-key-retry", test_init_get_tls_key_retry);
   g_test_add_func ("/session/init-tls-identity-rejected", test_init_tls_identity_rejected);
   g_test_add_func ("/session/capture-command-order", test_capture_command_order);
+  g_test_add_func ("/session/multi-capture-five-rounds", test_multi_capture_five_rounds);
+  g_test_add_func (
+      "/session/multi-capture-third-round-fails", test_multi_capture_third_round_fails);
   g_test_add_func ("/session/arm-short-completion", test_arm_short_completion);
   g_test_add_func ("/session/arm-io-completion", test_arm_io_completion);
   g_test_add_func ("/session/capture-requires-touch", test_capture_requires_touch);

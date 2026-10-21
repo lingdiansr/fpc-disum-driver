@@ -457,13 +457,15 @@ M6 只证明“采集”链路。fprintd 登录/验证需要 enroll（默认 5 �
 
 fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次采集和 close/reopen。
 
-- [ ] 审计并修正 `fpc_disum_session_capture_async()`：首次 capture 后 session 仍可再次进入 `CAPTURE_ARM`，TLS 通道复用，不重新执行 §6/§8。
-- [ ] 保证每轮独立：touch 窗口、ARM、GET_IMG、图像回调、finger status；`ARM_STOP` 只在 close/cleanup 执行一次。
-- [ ] 定义轮间失败语义：某轮 no-touch/取消/协议失败时，是终止整个 enroll 还是允许下一轮；不得吞错或复用旧图。
-- [ ] `test-fpc-disum-session` 增加 5 次连续 capture 的离线用例，以及第 2/3 轮取消、失败后 close 的用例。
-- [ ] 真机增加 `multi-capture N` 探针模式（同一 open，N 次按压/出图），验证 5 张图结构均合法、无会话重建。
+- [x] 审计并修正 `fpc_disum_session_capture_async()`：首次 capture 后 session 仍可再次进入 `CAPTURE_ARM`，TLS 通道复用，不重新执行 §6/§8。
+- [x] 保证每轮独立：touch 窗口、ARM、GET_IMG、图像回调、finger status；`ARM_STOP` 只在 close/cleanup 执行一次。
+- [x] 定义轮间失败语义：某轮 no-touch/取消/协议失败时终止本次 open；不得吞错或复用旧图。
+- [x] `test-fpc-disum-session` 增加 5 次连续 capture 的离线用例，以及第 3 轮 no-touch 后 close 的用例。
+- [x] 真机增加 `multi-capture N` 探针模式（同一 open，N 次按压/出图），验证 5 张图结构均合法、无会话重建。
 
 **完成判据**：一次 open 内 5/5 张合法图像，TLS/CMD_INIT 只发生一次，cleanup 只发生一次；离线与真机均有证据。
+
+**2026-10-21 验收**：离线 `test-fpc-disum-session` 46 例通过（含 5 轮与第 3 轮失败）；真机 `multi-capture --captures 5` 得到 **5/5** 张 112×88/9856 B 图像，一次 close/cleanup，run `~/fpc-disum-runs/m7-multi-retry-20261021T041258Z`。此前一轮第 3 轮因 NBIS 未检出细节点返回可重试错误，属 M7.2 图像质量问题，不是会话重建。
 
 ### M7.2 enroll / verify / identify
 
@@ -475,6 +477,12 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - [ ] 记录 FRR/FAR 的粗略样本（不是安全认证结论），至少覆盖成功/失败/重试。
 
 **完成判据**：enroll/verify/identify 在目标设备上可重复通过；失败路径不产生假成功；阈值与图像质量有记录。
+
+**2026-10-21 实测阻断**：libfprint 的 NBIS 在 112×88 图像上只提取到 **1 个 verify 细节点、3–5 个模板细节点**；5 个模板的 BZ3 分数全部 **0/40**。同一手指、enroll 5/5 成功。像素反转后为 3/3–5，2× 最近邻放大后仍 2–5，均无改善；这是细节点数量不足，不是阈值可修。下一步必须二选一：
+1. **自定义 RAW/纹理匹配**：使用 `FPI_PRINT_RAW` 将主机侧模板存入 `FpPrint::data`（可序列化），驱动覆盖 enroll/verify/identify；需阈值标定与假接受评估。
+2. **声明不支持 fprintd verify/identify**：仅保留 capture；M7.2/M7.3 终止，M8 只能发 capture-only 实验包。
+
+在作出选择前，不得调整 `bz3_threshold`、不得声称 fprintd 可登录。
 
 ### M7.3 fprintd daemon 生命周期与系统集成
 

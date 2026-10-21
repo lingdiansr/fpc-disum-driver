@@ -7,8 +7,12 @@
  * de-sensitised completion records and never plays a sound or spawns a
  * notification.
  *
- * Usage: fpc-disum-hw-probe <list|negative|capture|cancel|cancel-reopen|reopen>
- *                             [--cancel-after-ms N] [--output-dir PATH]
+ * Usage: fpc-disum-hw-probe <list|negative|capture|cancel|cancel-reopen|reopen|
+ *                             multi-capture>
+ *                             [--captures N] [--cancel-after-ms N] [--output-dir PATH]
+ *
+ * `multi-capture` opens the device once, runs N image rounds in that one
+ * session and closes it once: this is the same shape fprintd enroll needs.
  *
  * Exit status: 0 every expected round passed, 1 any round or the evidence
  * failed, 2 bad arguments or an unusable output directory, 130 the operator
@@ -50,6 +54,9 @@
 #define CAPTURE_GUARD_MS 90000
 #define OPEN_GUARD_MS 60000
 #define PROBE_MAX_ROUNDS 2
+/* One open, N image rounds: the range --captures accepts. */
+#define PROBE_MAX_CAPTURES 10
+#define PROBE_DEFAULT_CAPTURES 5
 
 typedef enum
 {
@@ -59,16 +66,21 @@ typedef enum
   PROBE_PHASE_CLEANUP,
 } ProbePhase;
 
+/* One capture round's own state; the device open/close is not part of it. */
 typedef struct
 {
   FpcDisumProbeCaptureState capture;
   gboolean active;
   gboolean have_primary;
+  FpcDisumSessionStatus logical_status;
+} RoundContext;
+
+/* The one cleanup record produced by a close, independent of any round. */
+typedef struct
+{
   gboolean have_cleanup;
   gboolean cleanup_failed;
-  FpcDisumSessionStatus logical_status;
-  gboolean cleanup_pass;
-} RoundContext;
+} CloseOutcome;
 
 typedef struct
 {
@@ -96,6 +108,7 @@ static const gchar *operator_pressed;
 static const gchar *operator_held;
 
 static RoundContext *active_round;
+static CloseOutcome *active_close;
 
 /* --------------------------------------------------------------- reporting */
 
@@ -124,16 +137,33 @@ static void
 describe_image (const FpImage *image)
 {
   gsize len = 0;
+  const guint8 *data;
+  guint8 min = 255, max = 0;
+  gdouble mean = 0.0, variance = 0.0;
 
-  fp_image_get_data ((FpImage *)image, &len);
+  data = fp_image_get_data ((FpImage *)image, &len);
 
-  printf ("image: %dx%d bytes=%zu structure_valid=%s\n", fp_image_get_width ((FpImage *)image),
-      fp_image_get_height ((FpImage *)image), len,
+  for (gsize i = 0; i < len; i++)
+    {
+      min = MIN (min, data[i]);
+      max = MAX (max, data[i]);
+      mean += data[i];
+    }
+  if (len > 0)
+    mean /= len;
+  for (gsize i = 0; i < len; i++)
+    variance += (data[i] - mean) * (data[i] - mean);
+  if (len > 0)
+    variance /= len;
+
+  printf ("image: %dx%d bytes=%zu structure_valid=%s min=%u max=%u mean=%.1f var=%.1f\n",
+      fp_image_get_width ((FpImage *)image), fp_image_get_height ((FpImage *)image), len,
       (fp_image_get_width ((FpImage *)image) == FPC_DISUM_IMAGE_WIDTH
           && fp_image_get_height ((FpImage *)image) == FPC_DISUM_IMAGE_HEIGHT
           && len == FPC_DISUM_IMAGE_PIXELS)
           ? "true"
-          : "false");
+          : "false",
+      min, max, mean, variance);
 }
 
 /* ------------------------------------------------------------------- cue */
@@ -274,8 +304,8 @@ lookup_nullable_string (GVariant *dict, const gchar *key)
   return NULL;
 }
 
-/* The diagnostics signal: write every record, and take the round's independent
- * termination/cleanup results from the records themselves. */
+/* The diagnostics signal: write every record, and take the round's own
+ * termination result and the close's cleanup result from the records. */
 static void
 on_diagnostic (FpDevice *device, GVariant *record, gpointer user_data)
 {
@@ -294,33 +324,34 @@ on_diagnostic (FpDevice *device, GVariant *record, gpointer user_data)
         }
     }
 
-  if (active_round == NULL || !active_round->active)
-    return;
-
   if (!g_variant_is_of_type (record, G_VARIANT_TYPE_VARDICT))
     return;
 
   g_variant_lookup (record, "kind", "&s", &kind);
 
-  if (primary != NULL)
+  if (active_round != NULL && active_round->active)
     {
-      FpcDisumSessionStatus status;
-
-      if (fpc_disum_probe_status_from_name (primary, &status))
+      if (primary != NULL)
         {
-          active_round->logical_status = status;
-          active_round->have_primary = TRUE;
+          FpcDisumSessionStatus status;
+
+          if (fpc_disum_probe_status_from_name (primary, &status))
+            {
+              active_round->logical_status = status;
+              active_round->have_primary = TRUE;
+            }
         }
     }
 
-  if (cleanup != NULL)
+  if (active_close != NULL)
     {
-      active_round->have_cleanup = TRUE;
+      if (cleanup != NULL)
+        {
+          active_close->have_cleanup = TRUE;
 
-      if (g_strcmp0 (cleanup, "ok") != 0 && g_strcmp0 (cleanup, "not-needed") != 0)
-        active_round->cleanup_failed = TRUE;
-
-      active_round->cleanup_pass = !active_round->cleanup_failed;
+          if (g_strcmp0 (cleanup, "ok") != 0 && g_strcmp0 (cleanup, "not-needed") != 0)
+            active_close->cleanup_failed = TRUE;
+        }
     }
 
   (void)kind;
@@ -391,9 +422,10 @@ open_device (FpDevice *device, GCancellable *cancellable)
   return ok;
 }
 
-static void
+static CloseOutcome
 close_device (FpDevice *device)
 {
+  CloseOutcome outcome = { 0 };
   g_autoptr (GCancellable) cancellable = g_cancellable_new ();
   g_autoptr (GError) error = NULL;
 
@@ -402,13 +434,19 @@ close_device (FpDevice *device)
   current_phase = PROBE_PHASE_CLEANUP;
   current_cancellable = NULL;
 
+  active_close = &outcome;
+
   if (!fp_device_close_sync (device, cancellable, &error))
     print_error ("close", error);
   else
     printf ("close: ok\n");
 
+  active_close = NULL;
+
   fflush (stdout);
   current_phase = PROBE_PHASE_IDLE;
+
+  return outcome;
 }
 
 static gboolean
@@ -427,12 +465,14 @@ image_structure_valid (const FpImage *image)
 }
 
 /*
- * One round: open the device, run exactly one capture with the expected
- * outcome, then close it.  The round's logical status and cleanup result come
- * from its own diagnostics records, never from error text.
+ * The activation/capture/collect half of a round.  The device must already be
+ * open; nothing here opens, closes or reinitialises it.  The round's logical
+ * status comes from its own completion record, never from error text.
+ * `capture_pass` covers only what this round can observe; the caller folds in
+ * the close result when the round owns an open/close pair.
  */
 static ProbeRoundResult
-capture_once (FpDevice *device, ProbeRoundExpectation expected, guint cancel_after_ms)
+capture_round (FpDevice *device, ProbeRoundExpectation expected, guint cancel_after_ms)
 {
   ProbeRoundResult result = { 0 };
   RoundContext round = { 0 };
@@ -448,12 +488,6 @@ capture_once (FpDevice *device, ProbeRoundExpectation expected, guint cancel_aft
 
   if (expected == PROBE_EXPECT_CANCELLED && cancel_after_ms > 0)
     round.capture.cancel_id = g_timeout_add (cancel_after_ms, cancel_timeout_cb, &round);
-
-  if (!open_device (device, round.capture.cancellable))
-    {
-      printf ("capture: not started because open failed\n");
-      goto finish;
-    }
 
   if (expected == PROBE_EXPECT_IMAGE)
     {
@@ -480,37 +514,30 @@ capture_once (FpDevice *device, ProbeRoundExpectation expected, guint cancel_aft
   else
     print_error ("capture", error);
 
-  /* The cleanup is part of the round and must complete even after a cancel. */
-  close_device (device);
-
-finish:
   result.image = image;
   result.image_structure_valid = image_structure_valid (image);
-  result.completion_seen = round.have_primary && round.have_cleanup;
+  result.completion_seen = round.have_primary;
 
   if (round.have_primary)
     result.logical_status = round.logical_status;
 
-  result.cleanup_pass = round.have_cleanup && round.cleanup_pass;
-
   switch (expected)
     {
     case PROBE_EXPECT_IMAGE:
-      result.capture_pass = result.completion_seen && result.cleanup_pass
-                            && result.logical_status == FPC_DISUM_SESSION_OK
+      result.capture_pass = round.have_primary && result.logical_status == FPC_DISUM_SESSION_OK
                             && result.image_structure_valid;
       break;
 
     case PROBE_EXPECT_NO_TOUCH:
       /* An unexpected image is a failure; it is never reinterpreted as a
        * capture round. */
-      result.capture_pass = result.completion_seen && result.cleanup_pass
+      result.capture_pass = round.have_primary
                             && result.logical_status == FPC_DISUM_SESSION_ERROR_NO_TOUCH
                             && image == NULL;
       break;
 
     case PROBE_EXPECT_CANCELLED:
-      result.capture_pass = result.completion_seen && result.cleanup_pass
+      result.capture_pass = round.have_primary
                             && result.logical_status == FPC_DISUM_SESSION_ERROR_CANCELLED
                             && image == NULL;
       break;
@@ -519,6 +546,38 @@ finish:
   round.active = FALSE;
   active_round = NULL;
   fpc_disum_probe_capture_state_clear (&round.capture);
+
+  return result;
+}
+
+/*
+ * One self-contained round for the legacy modes: open, exactly one capture with
+ * the expected outcome, then close.  Completion and cleanup are combined only
+ * here so the single-round verdict is exactly what it was before.
+ */
+static ProbeRoundResult
+capture_once (FpDevice *device, ProbeRoundExpectation expected, guint cancel_after_ms)
+{
+  ProbeRoundResult result = { 0 };
+  CloseOutcome close;
+  g_autoptr (GCancellable) open_cancellable = g_cancellable_new ();
+
+  result.logical_status = FPC_DISUM_SESSION_ERROR_IO;
+
+  if (!open_device (device, open_cancellable))
+    {
+      printf ("capture: not started because open failed\n");
+      return result;
+    }
+
+  result = capture_round (device, expected, cancel_after_ms);
+
+  /* The cleanup is part of the round and must complete even after a cancel. */
+  close = close_device (device);
+
+  result.cleanup_pass = close.have_cleanup && !close.cleanup_failed;
+  result.completion_seen = result.completion_seen && close.have_cleanup;
+  result.capture_pass = result.capture_pass && result.cleanup_pass && result.completion_seen;
 
   return result;
 }
@@ -533,6 +592,104 @@ print_round_result (ProbeRoundExpectation expected, const ProbeRoundResult *resu
       result->cleanup_pass ? "true" : "false", result->completion_seen ? "true" : "false",
       result->image != NULL ? "present" : "absent");
   fflush (stdout);
+}
+
+/*
+ * One line per multi-capture round.  The cleanup is deliberately absent: it is
+ * not known per round because the device is closed once, after the last round.
+ */
+static void
+print_multi_round (guint index, guint captures, const ProbeRoundResult *result)
+{
+  printf ("round-result: round=%u/%u expected=image logical_status=%s image=%s structure=%s\n",
+      index, captures, fpc_disum_probe_logical_status_name (result->logical_status),
+      result->image != NULL ? "present" : "absent",
+      result->image_structure_valid ? "true" : "false");
+  fflush (stdout);
+}
+
+static void
+print_multi_skipped (guint index, guint captures)
+{
+  printf ("round-result: round=%u/%u expected=image logical_status=not-run image=absent "
+          "structure=false\n",
+      index, captures);
+  fflush (stdout);
+}
+
+/*
+ * One open, N image rounds, one close.  A failed round ends the sequence: the
+ * session's failure is terminal for the open, so later rounds are reported as
+ * not run rather than reusing a stale result or image.  Every requested index
+ * still gets exactly one round-result line.
+ */
+static gboolean
+multi_capture (FpDevice *device, guint captures, ProbeRoundResult *results, gsize *out_rounds)
+{
+  CloseOutcome close = { 0 };
+  g_autoptr (GCancellable) open_cancellable = g_cancellable_new ();
+  gsize rounds = 0;
+  guint images = 0;
+  gboolean all_ok = TRUE;
+  gboolean cleanup_ok;
+  const gchar *cleanup_text;
+
+  *out_rounds = 0;
+
+  if (!open_device (device, open_cancellable))
+    {
+      printf ("multi-capture: not started because open failed\n");
+      return FALSE;
+    }
+
+  for (guint i = 0; i < captures; i++)
+    {
+      if (run_cancelled)
+        {
+          all_ok = FALSE;
+          break;
+        }
+
+      results[rounds] = capture_round (device, PROBE_EXPECT_IMAGE, 0);
+      print_multi_round (rounds + 1, captures, &results[rounds]);
+
+      if (results[rounds].image != NULL && results[rounds].image_structure_valid
+          && results[rounds].logical_status == FPC_DISUM_SESSION_OK)
+        images++;
+
+      rounds++;
+
+      if (!results[rounds - 1].capture_pass)
+        {
+          all_ok = FALSE;
+          break;
+        }
+    }
+
+  for (guint i = rounds; i < captures; i++)
+    print_multi_skipped (i + 1, captures);
+
+  /* Exactly one close for the whole open, after the last round. */
+  close = close_device (device);
+
+  cleanup_ok = close.have_cleanup && !close.cleanup_failed;
+  cleanup_text = !close.have_cleanup ? "missing" : (cleanup_ok ? "ok" : "failed");
+
+  printf ("multi-capture: images=%u/%u cleanup=%s\n", images, captures, cleanup_text);
+  fflush (stdout);
+
+  *out_rounds = rounds;
+
+  for (gsize i = 0; i < rounds; i++)
+    {
+      /* The one close belongs to every round of this open. */
+      results[i].cleanup_pass = cleanup_ok;
+      results[i].completion_seen = results[i].completion_seen && close.have_cleanup;
+      results[i].capture_pass
+          = results[i].capture_pass && results[i].cleanup_pass && results[i].completion_seen;
+    }
+
+  return all_ok && rounds == captures && cleanup_ok;
 }
 
 /* ------------------------------------------------------- binary identity */
@@ -735,10 +892,11 @@ static void
 print_usage (FILE *stream, const gchar *program)
 {
   fprintf (stream,
-      "usage: %s <list|negative|capture|cancel|cancel-reopen|reopen>"
-      " [--cancel-after-ms N] [--pressed-after-cue yes|no|unknown]"
-      " [--held-until-end yes|no|unknown] [--output-dir PATH]\n",
-      program);
+      "usage: %s <list|negative|capture|cancel|cancel-reopen|reopen|multi-capture>"
+      " [--captures N] [--cancel-after-ms N] [--pressed-after-cue yes|no|unknown]"
+      " [--held-until-end yes|no|unknown] [--output-dir PATH]\n"
+      "  multi-capture: one open, N image rounds, one close (default N=%d, range 1..%d)\n",
+      program, PROBE_DEFAULT_CAPTURES, PROBE_MAX_CAPTURES);
 }
 
 static gboolean
@@ -746,7 +904,8 @@ is_known_command (const gchar *command)
 {
   return g_strcmp0 (command, "list") == 0 || g_strcmp0 (command, "negative") == 0
          || g_strcmp0 (command, "capture") == 0 || g_strcmp0 (command, "cancel") == 0
-         || g_strcmp0 (command, "cancel-reopen") == 0 || g_strcmp0 (command, "reopen") == 0;
+         || g_strcmp0 (command, "cancel-reopen") == 0 || g_strcmp0 (command, "reopen") == 0
+         || g_strcmp0 (command, "multi-capture") == 0;
 }
 
 static FpDevice *
@@ -852,8 +1011,10 @@ main (int argc, char **argv)
   const gchar *output_path;
   g_autoptr (GError) output_error = NULL;
   ProbeRoundExpectation plan[PROBE_MAX_ROUNDS];
-  ProbeRoundResult results[PROBE_MAX_ROUNDS] = { 0 };
-  gboolean distinct[PROBE_MAX_ROUNDS] = { FALSE };
+  ProbeRoundResult results[PROBE_MAX_CAPTURES] = { 0 };
+  gboolean distinct[PROBE_MAX_CAPTURES] = { FALSE };
+  guint captures = PROBE_DEFAULT_CAPTURES;
+  gboolean captures_seen = FALSE;
   gsize n_rounds = 0;
   gsize planned_rounds = 0;
   FpcDisumProbeRun *run = NULL;
@@ -878,6 +1039,28 @@ main (int argc, char **argv)
         {
           print_usage (stdout, argv[0]);
           return 0;
+        }
+
+      if (g_strcmp0 (argv[i], "--captures") == 0)
+        {
+          guint64 value;
+
+          if (i + 1 >= argc)
+            {
+              fprintf (stderr, "--captures needs a value\n");
+              return 2;
+            }
+
+          value = g_ascii_strtoull (argv[++i], NULL, 10);
+          if (value < 1 || value > PROBE_MAX_CAPTURES)
+            {
+              fprintf (stderr, "--captures must be between 1 and %d\n", PROBE_MAX_CAPTURES);
+              return 2;
+            }
+
+          captures = (guint)value;
+          captures_seen = TRUE;
+          continue;
         }
 
       if (g_strcmp0 (argv[i], "--cancel-after-ms") == 0)
@@ -949,6 +1132,12 @@ main (int argc, char **argv)
       return 2;
     }
 
+  if (captures_seen && g_strcmp0 (command, "multi-capture") != 0)
+    {
+      fprintf (stderr, "--captures is only valid with multi-capture\n");
+      return 2;
+    }
+
   /* The context, not the device, owns the libusb context: keep it for the run. */
   context = fp_context_new ();
   device = find_single_device (context);
@@ -992,7 +1181,12 @@ main (int argc, char **argv)
 
   sigint_id = g_unix_signal_add (SIGINT, sigint_cb, NULL);
 
-  if (g_strcmp0 (command, "negative") == 0)
+  if (g_strcmp0 (command, "multi-capture") == 0)
+    {
+      /* One open, N rounds, one close; the evidence must contain all N. */
+      planned_rounds = captures;
+    }
+  else if (g_strcmp0 (command, "negative") == 0)
     {
       plan[planned_rounds++] = PROBE_EXPECT_NO_TOUCH;
     }
@@ -1017,43 +1211,54 @@ main (int argc, char **argv)
 
   run = fpc_disum_probe_run_new ();
 
-  for (gsize i = 0; i < planned_rounds; i++)
+  if (g_strcmp0 (command, "multi-capture") == 0)
     {
-      if (run_cancelled)
-        break;
+      /* The open/close pair is owned by multi_capture(), not by each round. */
+      all_passed = multi_capture (device, captures, results, &n_rounds);
 
-      results[n_rounds] = capture_once (device, plan[i], cancel_after_ms);
-      print_round_result (plan[i], &results[n_rounds]);
-      fpc_disum_probe_run_add (run, &results[n_rounds]);
-      n_rounds++;
-    }
-
-  if (g_strcmp0 (command, "reopen") == 0)
-    {
-      /* Two live images are compared in memory; neither is stored or hashed. */
-      gboolean distinct_images
-          = n_rounds == planned_rounds
-            && fpc_disum_probe_images_distinct (results[0].image, results[1].image);
-
-      printf ("image_distinct=%s\n", distinct_images ? "true" : "false");
-
-      if (n_rounds == planned_rounds)
-        {
-          distinct[0] = distinct_images;
-          distinct[1] = distinct_images;
-        }
-
-      all_passed = fpc_disum_probe_reopen_passed (run, results[0].image, results[1].image);
-    }
-  else if (g_strcmp0 (command, "cancel-reopen") == 0)
-    {
-      /* The first round must be truly cancelled, the second must deliver a
-       * valid image; both cleanups must complete. */
-      all_passed = fpc_disum_probe_run_passed (run);
+      for (gsize i = 0; i < n_rounds; i++)
+        fpc_disum_probe_run_add (run, &results[i]);
     }
   else
     {
-      all_passed = fpc_disum_probe_run_passed (run);
+      for (gsize i = 0; i < planned_rounds; i++)
+        {
+          if (run_cancelled)
+            break;
+
+          results[n_rounds] = capture_once (device, plan[i], cancel_after_ms);
+          print_round_result (plan[i], &results[n_rounds]);
+          fpc_disum_probe_run_add (run, &results[n_rounds]);
+          n_rounds++;
+        }
+
+      if (g_strcmp0 (command, "reopen") == 0)
+        {
+          /* Two live images are compared in memory; neither is stored or hashed. */
+          gboolean distinct_images
+              = n_rounds == planned_rounds
+                && fpc_disum_probe_images_distinct (results[0].image, results[1].image);
+
+          printf ("image_distinct=%s\n", distinct_images ? "true" : "false");
+
+          if (n_rounds == planned_rounds)
+            {
+              distinct[0] = distinct_images;
+              distinct[1] = distinct_images;
+            }
+
+          all_passed = fpc_disum_probe_reopen_passed (run, results[0].image, results[1].image);
+        }
+      else if (g_strcmp0 (command, "cancel-reopen") == 0)
+        {
+          /* The first round must be truly cancelled, the second must deliver a
+           * valid image; both cleanups must complete. */
+          all_passed = fpc_disum_probe_run_passed (run);
+        }
+      else
+        {
+          all_passed = fpc_disum_probe_run_passed (run);
+        }
     }
 
   probe_binary = identify_probe_binary ();
