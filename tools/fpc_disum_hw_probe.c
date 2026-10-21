@@ -56,7 +56,7 @@
 #define OPEN_GUARD_MS 60000
 #define PROBE_MAX_ROUNDS 2
 /* One open, N image rounds: the range --captures accepts. */
-#define PROBE_MAX_CAPTURES 10
+#define PROBE_MAX_CAPTURES 12
 #define PROBE_DEFAULT_CAPTURES 5
 
 typedef enum
