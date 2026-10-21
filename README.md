@@ -4,7 +4,7 @@
 
 Linux `libfprint` driver for the **FPC Disum** fingerprint sensor (`10a5:9201`), the FPC1022-based 112×88 press sensor. This repository is a `libfprint` fork; it is not a standalone daemon.
 
-> **Status: experimental.** In-process `libfprint` enroll/verify and an **isolated fprintd daemon** enroll/verify/list/delete have passed on the tested device. **System fprintd/PAM/desktop login has not been validated end-to-end.** Do not replace your system `libfprint` for daily authentication without understanding the risk.
+> **Status: experimental.** In-process `libfprint`, an isolated fprintd daemon, and the **system fprintd** (via a temporary systemd drop-in) have passed enroll/verify/list/delete on the tested device. The system test was rolled back; **PAM/desktop login has not been validated end-to-end.** Do not replace your system `libfprint` for daily authentication without understanding the risk.
 
 ## Device support
 
@@ -118,8 +118,8 @@ Do not edit the spec or vectors. `docs/IMPLEMENTATION_REQUIREMENTS.md` records i
 
 ## Status and limitations
 
-- In-process results on one device: 5/5 coverage-guided enrollment, 3/3 genuine verify, 0/3 impostor verify. Isolated fprintd: 5-stage enroll, same-finger `verify-match` (SIGFM 36/10), left-thumb `verify-no-match` (all templates 0/10), list/delete passed. These are small samples, not a security claim.
-- System fprintd/PAM/desktop login, `fprintd-identify` with multiple templates, multi-user storage, suspend/resume and the full daemon lifecycle remain unverified.
+- In-process results on one device: 5/5 coverage-guided enrollment, 3/3 genuine verify, 0/3 impostor verify. Isolated fprintd: 5-stage enroll, same-finger `verify-match` (SIGFM 36/10), left-thumb `verify-no-match` (all templates 0/10), list/delete passed. System fprintd (temporary drop-in, rolled back) repeated enroll/verify/list/delete successfully. These are small samples, not a security claim.
+- System PAM/desktop login, `fprintd-identify` with multiple templates, multi-user storage, suspend/resume and the full daemon lifecycle remain unverified.
 - Small-area sensors have limited overlap between presses; expect higher false rejects than a full-size sensor.
 - SIGFM templates contain image-derived features. Treat stored templates and any captured images as biometric data.
 
