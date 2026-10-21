@@ -192,13 +192,30 @@ endforeach
 
 all_drivers = default_drivers + virtual_drivers
 
-if drivers == [ 'all' ]
-    drivers = all_drivers
-endif
+normalized_drivers = []
+foreach driver : drivers
+    driver = driver.strip()
+    if driver == ''
+        continue
+    endif
 
-if drivers == [ 'default' ]
-    drivers = default_drivers
-endif
+    if driver == 'all'
+        normalized_drivers += all_drivers
+    elif driver == 'default'
+        normalized_drivers += default_drivers
+    elif driver in drivers_info
+        normalized_drivers += driver
+    else
+        error('Unknown driver "@0@" in the drivers option.'.format(driver))
+    endif
+endforeach
+
+drivers = []
+foreach driver : normalized_drivers
+    if driver not in drivers
+        drivers += driver
+    endif
+endforeach
 
 if not have_spi
     foreach driver: drivers
