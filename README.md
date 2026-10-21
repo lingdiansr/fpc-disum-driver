@@ -1,5 +1,7 @@
 # fpc-disum-driver
 
+**English** | [简体中文](README.zh-CN.md)
+
 Linux `libfprint` driver for the **FPC Disum** fingerprint sensor (`10a5:9201`), the FPC1022-based 112×88 press sensor. This repository is a `libfprint` fork; it is not a standalone daemon.
 
 > **Status: experimental.** In-process `libfprint` enroll/verify works with SIGFM on the tested device. **fprintd/PAM login has not been validated end-to-end.** Do not replace your system `libfprint` for daily authentication without understanding the risk.
