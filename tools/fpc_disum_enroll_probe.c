@@ -107,8 +107,8 @@ enroll_progress (
   (void)print;
   (void)user_data;
 
-  printf ("enroll: stage %d/%d%s\n", completed_stages, fp_device_get_nr_enroll_stages (device),
-      error != NULL ? " (error)" : "");
+  printf ("enroll: stage %d/%d%s%s\n", completed_stages, fp_device_get_nr_enroll_stages (device),
+      error != NULL ? " (error): " : "", error != NULL ? error->message : "");
   fflush (stdout);
 
   /* Probe-only operator pacing: the next ARM follows immediately otherwise. */

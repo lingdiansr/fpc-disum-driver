@@ -32,6 +32,22 @@ sha256sum -c docs/SHA256SUMS
   研究日志、私有抓包、Windows 产物或任何专有二进制/反编译输出。
 - 遇到"规格没写、无法继续"的点：**停下并记录**（哪一步、缺什么参数），交回研究侧补齐，不要猜测设备行为。
 
+## 匹配器与注册覆盖
+
+`fpc_disum` 不使用 NBIS/Bozorth3：112×88 的图通常只有 1–5 个细节点，低于 NBIS 的 `MIN_COMPUTABLE_BOZORTH_MINUTIAE=10` 硬门，分数恒为 0。驱动改用 **SIGFM**（OpenCV SIFT + Lowe ratio + 几何一致性），匹配阈值 10；SIGFM 核心与集成来自公开 libfprint MR !530/!570（LGPL-2.1-or-later），构建需要 OpenCV/C++。
+
+注册阶段启用覆盖门：当新图与已接受模板的平移小于 `enroll_coverage_shift`（本驱动 12 px）时提示“移远一点”，完全无重叠时提示“移近一点”，二者都不消耗注册阶段。实现入口在 `FpImageDeviceClass` 和 `fpi_print_sigfm_coverage()`；这是一个设计变更，不属于净室规格基线。
+
+### 真机结果（2026-10-21，10a5:9201，FW 021.26.2.050）
+
+- 覆盖引导注册：5/5 成功（有多次预期内重试）；
+- 同指 verify：3/3 `match=true`；
+- 异指 verify：0/3 `match=true`（3/3 拒绝）；
+- `examples/enroll` → 磁盘存储 → `examples/verify` 反序列化验证：可匹配；
+- 离线 `meson test --no-suite data`：17 通过、32 跳过、0 失败。
+
+这些是单设备/少样本结果，不是安全认证；fprintd/PAM 端到端和打包仍需单独验证。
+
 ## 从哪读起
 
 - **契约本身**：`docs/CLEANROOM_SPEC.md`

@@ -549,6 +549,12 @@ fpi_device_fpc_disum_class_init (FpiDeviceFpcDisumClass *klass)
    * the plane is never rotated, transposed or flipped. */
   img_class->img_width = FPC_DISUM_IMAGE_WIDTH;
   img_class->img_height = FPC_DISUM_IMAGE_HEIGHT;
+  /* NBIS cannot score captures below ten minutiae; the reviewed images have
+   * one to five.  SIGFM uses SIFT keypoints and has no such floor. */
+  img_class->algorithm = FPI_DEVICE_ALGO_SIGFM;
+  img_class->score_threshold = 10;
+  /* Ask for a shifted press when an enrollment image barely moves. */
+  img_class->enroll_coverage_shift = 12;
 
   img_class->img_open = dev_open;
   img_class->img_close = dev_close;
