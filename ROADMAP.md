@@ -239,7 +239,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 > **2026-10-21 完成记录（优先于下方历史轮次）**
 >
-> **根因与修复**：初始化/重枚举期间没有持续读 bulk，设备复位的 `EVT_INIT_RESULT` 被丢弃；该偏差单独即可造成 ARM 后零上报（[`docs/m6/INIT_READ_GAP_FINDING.md`](docs/m6/INIT_READ_GAP_FINDING.md)）。后端已改为在 `CMD_INIT` 前启动连续读 URB，跨复位保留帧；reopen 等旧读自然结束（2.5 s 有界 grace），新 handle claim 后先重启读再完成回调。
+> **根因与修复**：初始化/重枚举期间没有持续读 bulk，设备复位的 `EVT_INIT_RESULT` 被丢弃；该偏差单独即可造成 ARM 后零上报（[`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §2）。后端已改为在 `CMD_INIT` 前启动连续读 URB，跨复位保留帧；reopen 等旧读自然结束（2.5 s 有界 grace），新 handle claim 后先重启读再完成回调。
 >
 > **真机验收（全部 exit 0，cleanup 完成）**：
 >
@@ -253,7 +253,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 >
 > **离线**：llvm / gcc / sanitizers / device 四 profile 均 cleanroom 4/4、驱动与核心 12/12；USB smoke 通过。
 >
-> **支持范围/未支持项/偏离**：见 [`docs/m6/SUPPORT_DECLARATION.md`](docs/m6/SUPPORT_DECLARATION.md)。M6 声明范围外的录入/模板匹配已由 M7.2 的 SIGFM 路径在 in-process 探针中验证（见 M7.2）；fprintd/PAM、同会话第二次采集、异常复位恢复、其他设备/固件、DFU 与上游接受度仍未验证。
+> **支持范围/未支持项/偏离**：见 [`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §6。M6 声明范围外的录入/模板匹配已由 M7.2 的 SIGFM 路径在 in-process 探针中验证（见 M7.2）；fprintd/PAM、同会话第二次采集、异常复位恢复、其他设备/固件、DFU 与上游接受度仍未验证。
 >
 > 下方 2026-10-18 的验证回顾与各轮记录保留为历史，其中“根因未定/失败点不在驱动侧/不得宣称 M6 通过”的结论已被本轮证据取代。
 
@@ -267,13 +267,13 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 > 四配置指定离线组各 14/14 通过，安全 CLI 用法分支 smoke 退出 2；本次未启动真实采集，
 > 未修改生产代码。请将该复核文档交给规格侧，并按其中 Q1–Q6 补充去敏对照元数据。
 
-**状态（原始 2026-10-18 记录，已被顶部 2026-10-21 完成块取代）**：前置条件已满足（`cleanroom` 4/4 含 22 条向量重建；原生用例在 llvm／sanitizers／gcc 下全绿）。下方首次真机失败记录仅作历史保留；当前完成范围以顶部表格与 [`docs/m6/SUPPORT_DECLARATION.md`](docs/m6/SUPPORT_DECLARATION.md) 为准。
+**状态（原始 2026-10-18 记录，已被顶部 2026-10-21 完成块取代）**：前置条件已满足（`cleanroom` 4/4 含 22 条向量重建；原生用例在 llvm／sanitizers／gcc 下全绿）。下方首次真机失败记录仅作历史保留；当前完成范围以顶部表格与 [`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §6 为准。
 
 - [x] 先完成 22 条向量、原生状态机测试和 ASan/UBSan 检查，再申请具体范围的硬件实验授权。
 - [x] 经授权验证：无手指负例、单次采图、超时/取消、取消后再采集与 close/reopen；只声明实际验证的能力。
 - [x] 敏感产物使用独立 0700 目录、0600 文件；真实图像、PSK/envelope、设备日志不进入 Git、CI 附件或净室交付包。
 - [x] 默认不替换系统 libfprint、不启用 PAM/登录验证；未做系统部署或认证实验。
-- [x] 发布时列明净室哈希、上游 commit、实际支持范围、已运行验收和永久未支持项，维护干净侧接触声明（见 [`docs/m6/SUPPORT_DECLARATION.md`](docs/m6/SUPPORT_DECLARATION.md)）。
+- [x] 发布时列明净室哈希、上游 commit、实际支持范围、已运行验收和永久未支持项，维护干净侧接触声明（见 [`docs/IMPLEMENTATION_REQUIREMENTS.md`](docs/IMPLEMENTATION_REQUIREMENTS.md) 的 §6）。
 
 **完成判据**：约定范围内的功能可由运行证据证明，仓库没有假成功路径；未验证能力没有被宣传为支持。上游提交和桌面认证扩展不与单次采图验收混为一谈。
 
@@ -507,97 +507,59 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 ### M7.5 支持范围更新
 
-- [ ] 将 M7 结果写回 `docs/m6/SUPPORT_DECLARATION.md`（或新建 fprintd 支持声明），区分“libfprint 采集”与“fprintd enroll/verify”。
-- [ ] 列出已验证的 fprintd 版本、Arch 包版本、设备/固件、未支持项。
-- [ ] M7 未全部通过前，M8 不得发布稳定 AUR 包。
+- [ ] 将 M7 结果写回 `docs/IMPLEMENTATION_REQUIREMENTS.md`，区分“libfprint in-process”与“fprintd/PAM 端到端”。
+- [ ] 列出已验证的 fprintd 版本、设备/固件、未支持项。
+- [ ] M7 未全部通过前，M8 的发布产物只能标记 experimental，不得描述为生产可用。
 
 **完成判据**：支持声明与真机证据一致；不存在“代码存在即宣称支持”的条目。
 
-## M8：AUR 打包与分发（方案：libfprint fork 的 drop-in 替换包）
+## M8：CI/CD 与发布工程（下游打包不在本仓库）
 
-> **前置**：M7 全部通过。M7 未完成时只允许发布 `-git`/实验包，并在包页标注“capture-only，不可用于登录”。
+> **前置**：M7.2 的 in-process 路径已验证；fprintd/PAM 未完成。AUR、发行版包、PAM 策略和系统库替换由下游维护，本仓库不创建 PKGBUILD，也不发布替换系统 `libfprint` 的包。
 
-**目标**：在 Arch Linux / AUR 上提供 `libfprint-fpc-disum`，以源码构建的 libfprint fork 替换系统 `libfprint`，让现有 `fprintd` 无需修改即可枚举并使用 `10a5:9201`。不打包厂商二进制、不替换 fprintd、不做独立 D-Bus 守护进程。
+**目标**：用可复现的 CI 构建、测试和源码发布替代手工打包；硬件验收保持手动。
 
-**范围**：x86_64；`fprintd` 1.94.x；`libfprint` 1.94.100 基线；设备 `10a5:9201 / bcdDevice 0x0250`；LGPL-2.1-or-later。其他设备/固件、TOD 二进制、PAM 策略定制不在本里程碑。
+### M8.0 CI 基线
 
-### M8.0 发布前决策与冻结
+- [ ] 固定 Meson、编译器、依赖和 OpenCV 版本的兼容窗口；记录已验证的版本组合。
+- [ ] 构建矩阵：LLVM、GCC、ASan+UBSan、仅编译 `device` 配置；CI 不连接真实传感器。
+- [ ] 发布前检查：工作树干净、tag/commit 固定、`docs/SHA256SUMS` 可验证、许可证/NOTICE 完整。
 
-- [ ] 确定公开源码地址与稳定 tag/commit（AUR 必须能匿名拉取；当前本地仓库不能直接作为 `source`）。
-- [ ] 固定 `pkgver=1.94.100`、`pkgrel=1`、上游 commit、驱动/核心补丁清单、净室规格哈希。
-- [ ] 确定包名：稳定包 `libfprint-fpc-disum`；可选 VCS 包 `libfprint-fpc-disum-git`。
-- [ ] 写明替换系统库的影响：所有指纹设备都改用本 fork；用户必须显式安装。
-- [ ] 许可证与 NOTICE：保留上游 `COPYING`、版权与 LGPL；声明 fork 的核心 USB 扩展。
+**完成判据**：同一 commit 在干净环境可重复构建。
 
-**完成判据**：源码 URL、tag、哈希、包名、维护者、支持范围写死，后续阶段不再改方案。
+### M8.1 Pipeline
 
-### M8.1 PKGBUILD 与包骨架
+- [ ] checkout 后先执行 `sha256sum -c docs/SHA256SUMS`，失败即停止。
+- [ ] 配置、编译、cleanroom/unit/protocol/state-machine 测试；clang-tidy 与格式检查作为门禁。
+- [ ] 检查 `libfprint-2.so` 的 soname/公共符号，避免破坏其他驱动或 `fprintd` ABI。
+- [ ] 产出源码 tarball、SHA-256、构建/测试日志；不产出或上传图像、PSK、envelope、TLS 载荷。
+- [ ] 缓存依赖但不得缓存过期构建产物；clean build 与增量构建分别验证。
 
-- [ ] `pkgname=libfprint-fpc-disum`，`arch=('x86_64')`，`license=('LGPL-2.1-or-later')`。
-- [ ] `provides=('libfprint' 'libfprint-2.so=2-64')`；`conflicts=('libfprint')`；不设 `replaces`。
-- [ ] `depends=(libgcc glib2 glibc libgudev libgusb libusb openssl pixman)`；`makedepends=(meson ninja gcc pkgconf python)`；按实际 Meson 选项补 `git`。
-- [ ] `source` 指向固定 tag/commit；稳定包使用可校验归档，`sha256sums` 非 `SKIP`；VCS 包单独提供 `pkgver()`。
-- [ ] `build()`：Meson 构建完整 libfprint（保留其他驱动），关闭文档/introspection，不裁剪驱动；`package()` 用 `meson install --destdir`。
-- [ ] `install` 脚本只做提示：重启 `fprintd`、运行 `fprintd-list`；不自动启用 PAM、不改 `/etc/pam.d`。
-- [ ] 生成并提交 `.SRCINFO`；`namcap PKGBUILD` 与 `namcap` 产物包无错误。
+**完成判据**：任一 cleanroom 哈希、测试或 ABI 门禁失败时，pipeline 失败关闭。
 
-**完成判据**：`makepkg --cleanbuild --check` 成功；包内只有源码构建产物，无预编译二进制。
+### M8.2 发布
 
-### M8.2 干净构建与 ABI 校验
+- [ ] 版本号、changelog、支持范围、已知限制、回滚说明随源码归档发布。
+- [ ] 发布前完成一次手动硬件冒烟（采集、取消/重开、SIGFM 注册/验证）；结果写入 release notes，不进入 CI。
+- [ ] 源码归档可复现；发布说明明确“fprintd/PAM 未验证”和“不得用于生产认证”。
+- [ ] 不发布 AUR/发行版包；下游打包必须自行声明源、版本、依赖和回滚方式。
 
-- [ ] 在干净 chroot（devtools `extra-x86_64-build`）构建，不依赖本机 `_build`。
-- [ ] 校验 soname/符号：`readelf -d` 的 `SONAME` 为 `libfprint-2.so.2`；`provides` 的 `libfprint-2.so=2-64` 与官方一致；公共符号版本未被破坏。
-- [ ] `pacman -U` 安装时只与 `libfprint` 冲突；`fprintd` 依赖仍满足；`ldd /usr/lib/fprintd` 解析到新库。
-- [ ] 运行 `fprintd-list`、`fprintd-enroll`、`fprintd-verify` 的最小冒烟（见 M8.4）。
+**完成判据**：release 资产只含源码、校验和与证据摘要；无系统包或二进制替换物。
 
-**完成判据**：chroot 构建可复现；安装/升级不产生未声明文件冲突；`fprintd` 能启动。
+### M8.3 维护与上游化
 
-### M8.3 安装、升级与回滚
+- [ ] 上游 libfprint 升级或 OpenCV/ABI 变化时重建并复跑矩阵；记录 rebase 成本。
+- [ ] 将驱动与核心 USB 重取扩展提交上游；上游接受后标记本 fork 为过渡/退役。
+- [ ] 安全与隐私：不收集指纹图像；不把模板或 run 目录打包进发布物。
 
-- [ ] 安装流程：`pacman -U` 替换 `libfprint` → `systemctl restart fprintd` → `fprintd-list` 看到设备。
-- [ ] 升级流程：AUR 包 `pkgrel`/上游 tag 变更后重建；`pacman -Syu` 不会静默换回官方库；在包说明中写明需手动更新。
-- [ ] 回滚：卸载本包后重装官方 `libfprint`，`fprintd` 恢复；不残留驱动私有文件。
-- [ ] 记录其他指纹设备的影响；至少验证枚举不崩溃，无法实测的型号在包页标注风险。
-
-**完成判据**：安装、升级、卸载/回滚三步均有可复现命令与结果记录。
-
-### M8.4 包安装后的 fprintd 冒烟（复用 M7 结果）
-
-M8 不重新定义功能验收；M7.0–M7.5 全部通过是前置。本阶段只验证打包没有破坏已验证路径。
-
-- [ ] 安装包后 `fprintd-list` 显示 `FPC Disum Fingerprint Sensor`。
-- [ ] 复用 M7 的 enroll/verify 步骤跑一遍（5 段 enroll + 成功/失败 verify），结果与 M7 基线一致。
-- [ ] 重启 `fprintd`、重启系统后设备仍可 enroll/verify。
-- [ ] 卸载本包并恢复官方 `libfprint` 后，`fprintd` 行为恢复。
-- [ ] 记录包版本、`fprintd` 版本、M7/M8 run_id。
-
-**门槛**：M7 未通过或本冒烟失败时，只能发布 `-git`/实验包并在包页明确标注“capture-only，不可用于登录”；不得发布稳定包或宣称 fprintd 可用。
-
-### M8.5 AUR 发布
-
-- [ ] 提交 `libfprint-fpc-disum`（及可选 `-git`）到 AUR；包页写明支持设备、固件、已验证 fprintd 版本、未支持项、回滚方法。
-- [ ] 附净室规格/向量哈希、上游 commit、M6 支持声明、真机 run_id（不含图像/密钥）。
-- [ ] 版本策略：上游 libfprint 升级或 fprintd soname 变化时重建；驱动补丁 rebase 记录。
-- [ ] 安全与隐私：不收集指纹图像；包不写用户目录；不修改 PAM 默认配置。
-
-**完成判据**：AUR 包可被干净系统安装；包页信息足以让用户判断风险与回滚。
-
-### M8.6 上游化与退役
-
-- [ ] 将驱动与核心 USB 重取扩展提交上游；处理 review、ABI/风格与测试要求。
-- [ ] 上游接受后，AUR 包改为跟踪正式版或标记 deprecated；删除 drop-in 替换说明。
-- [ ] 若上游拒绝，保留 AUR 维护分支并记录每版 rebase 成本。
-
-**完成判据**：上游 MR 状态明确；AUR 包有继续维护或退役的决定。
+**完成判据**：上游状态、维护周期和退役决定有记录。
 
 ### 风险与边界
 
-- **替换系统库影响所有设备**：无法只对 FPC 生效；包页必须警告。
-- **fprintd/ABI 漂移**：soname 或依赖变化会导致重建；稳定包需固定兼容窗口。
-- **enroll/verify 未验证**：这是当前最大功能风险；M7.2/M7.4 是硬门槛，M8.4 只做打包后的回归。
-- **AUR 政策**：`provides/conflicts` 替换核心库属于高影响包；不自动启用 PAM，不静默替换。
-- **源码公开**：没有匿名可拉取的 tag，AUR 包无法构建；M8.0 必须先解决。
-- **其他传感器回归**：构建保留全部驱动，但只对目标设备做真机验收；其余仅做枚举冒烟。
+- **CI 无硬件**：自动测试只能证明编译、协议/状态机和 cleanroom 向量，不能证明真实采集或匹配成功率。
+- **OpenCV 依赖**：SIGFM 增加 C++/OpenCV 依赖；不满足时构建失败关闭。
+- **下游打包差异**：AUR/发行版可能使用不同 soname、fprintd 版本或 PAM 配置；本仓库不为其行为背书。
+- **fprintd/PAM 未验证**：这是当前最大功能风险，不能用 in-process 结果替代端到端验收。
 
 ## 开发规则
 
