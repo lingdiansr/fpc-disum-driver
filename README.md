@@ -62,25 +62,11 @@ sha256sum -c docs/SHA256SUMS
 
 ## 开发路线与当前状态
 
-- [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收、M7 fprintd 端到端功能补全（未完成）、M8 AUR 打包与分发（规划中）。
-- 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
-  commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
-- **当前状态：M0–M6 已在声明范围内完成。** 2026-10-20 修复初始化读取缺口后，真机已通过：单次采集（初始化 5 帧/247 B，含 `EVT_INIT_RESULT`；17 帧/10,878 B，112×88/9856 B）、无手指负例、取消、取消后再采集、close/reopen 两次采集（两图不同）。支持与未支持范围见 [docs/m6/SUPPORT_DECLARATION.md](docs/m6/SUPPORT_DECLARATION.md)。**这不等于上游 libfprint 接受、PAM/fprintd 可用、录入/模板匹配已验证或异常复位恢复已支持。**
-- **M7（未完成）**：fprintd 端到端仍缺同会话 5 段采集、enroll/verify/identify、NBIS 匹配/阈值、D-Bus 取消、suspend/resume 与多用户存储验收；M6 的采集通过不等于 fprintd 可用于登录。
-- **分发路线**：M8 计划以 `libfprint-fpc-disum` 的 AUR drop-in 包替换系统 libfprint，fprintd 保持不变；**前置是 M7 全部通过**，否则只能发布 `-git`/实验包并标注 capture-only。详见 [ROADMAP.md](ROADMAP.md) 的 M7/M8。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
-- 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_session.c`（单次会话状态机）：§6 初始化序列与 `CMD_INIT` 后换句柄、§8 握手、§4.5 `ARM`→触摸→`GET_IMG`→取图、§16 失败/取消/清理。它只通过 `fpc_disum_transport.h` 的传输边界访问设备，因此可在没有硬件的情况下被合成事件完整验收。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_usb.c`：私有 libusb-1.0 异步后端。它在工厂阶段启动一条后端自有的 0x82 连续读 URB，跨 `CMD_INIT` 复位与重枚举保留数据；控制传输与读并发，`cancel`/teardown 等待真实完成。`CMD_INIT` 后的句柄重取通过核心显式事务（begin/allow/commit/abort）完成，不发送 `SET_CONFIGURATION`。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum.c`：`FpImageDevice` 适配层（`img_open`/`img_close`/`activate`/`deactivate`/`change_state`）。open 建新会话并跑 §6+§8，取图完成时用真实图像回调上报，close 走 §16.3 清理并释放密码学与传输资源；`usb_discover` 只接受约定固件版本。
-- 已实现 `libfprint/drivers/fpc_disum/fpc_disum_error.c`：会话结果→libfprint 错误映射，取消／窗口到期／USB 失败／协议与安全失败各自成类（规格 §16.2/§16.3 要求可区分）。
-- 真机运行工具：`tools/fpc_disum_hw_probe.c`（仅在手选驱动集时编译；从不注册为测试），负责枚举、无手指负例、单次采图、取消、取消后再开与 close/reopen。它把去敏完成记录写成 JSONL、支持非交互式操作者反馈，日志按 0700/0600 存放；不保存真实图像、密钥或 TLS 载荷。
-- 适配层与核心的交互现在有一部分可离线驱动：`test-fp-context-usb` 用人工 GUsb JSON 和 fake USB FpDevice 覆盖核心热插拔/身份路由，`test-fpc-disum-usb` 用链接期 libusb wrap 覆盖真实 USB 后端（含跨重枚举连续读）。完整的 `FpImageDevice` + 真实 libfprint 核心 + 交互式 TLS 组合仍由评审与 M6 真机覆盖，不记作完整离线验证。
-- 上游框架及其他型号驱动不是本传感器的协议来源；原有公开录制测试数据不作为本项目的净室验收输入。
-- Git 本地开发分支为 `main`，上游 remote 为 `upstream`。不自动提交本侧修改，也不执行 push。
-- 本侧对上游的必要构建修正：`tests/meson.build` 的无 GI 分支使用键、值双变量遍历驱动字典，以支持固定版本 Meson 的 C-only 配置；未改变测试行为。
-- 本侧对上游的回调修正：虚拟图像驱动的延迟 open/close、原生 SSM 清理及 identify 测试使用签名匹配的回调，不改变 libfprint API，不关闭 UBSan 的函数类型检查。
+- 里程碑、历史证据与边界见 [ROADMAP.md](ROADMAP.md)；支持与未支持范围见 [docs/m6/SUPPORT_DECLARATION.md](docs/m6/SUPPORT_DECLARATION.md)。
+- 上游基线：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`；保留上游 `COPYING`、版权与开发约定（LGPL-2.1-or-later）。
+- **当前状态**：M0–M6 已在声明范围内完成；M7.2 的 SIGFM 匹配与覆盖引导注册已在真机通过（注册 5/5，同指 verify 3/3，异指 verify 0/3）。fprintd/PAM 端到端、M7.3/M7.4 生命周期与多用户存储、M8 打包仍未完成。
+- 代码落点：`libfprint/drivers/fpc_disum/`（协议、TLS、会话、USB、诊断、错误映射、`FpImageDevice` 适配）与 `libfprint/sigfm/`（匹配器）；真机工具在 `tools/fpc_disum_hw_probe.c`，只写去敏记录，不保存图像、密钥或 TLS 载荷。
+- 本侧对上游的必要构建/回调修正保留在 ROADMAP；不自动 push，不默认替换系统 libfprint，不启用 PAM。
 
 ## 本地开发与质量检查（无真实采集）
 

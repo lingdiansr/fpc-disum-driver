@@ -8,7 +8,7 @@
 
 当前 M6 文档：
 
-- [SUPPORT_DECLARATION.md](SUPPORT_DECLARATION.md)：支持范围、五项真机验收 run、未支持项、已知偏离。
+- [SUPPORT_DECLARATION.md](SUPPORT_DECLARATION.md)：支持范围、五项真机验收 run、未支持项、已知偏离；§6 记录 M7.2 的 SIGFM/覆盖引导增量。
 - [ARM_GATE_NOTE.md](ARM_GATE_NOTE.md)：净室侧补充——ARM 是 `EVT_FINGER_DWN` 的前提；ARM 返回 4 B 不是武装确认；ARM 时机与 CMD_INIT 载荷已排除。
 - [INIT_READ_GAP_FINDING.md](INIT_READ_GAP_FINDING.md)：零触摸根因——初始化/重枚举期间必须持续读 bulk，否则 `EVT_INIT_RESULT` 丢失。
 

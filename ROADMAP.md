@@ -253,7 +253,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 >
 > **离线**：llvm / gcc / sanitizers / device 四 profile 均 cleanroom 4/4、驱动与核心 12/12；USB smoke 通过。
 >
-> **支持范围/未支持项/偏离**：见 [`docs/m6/SUPPORT_DECLARATION.md`](docs/m6/SUPPORT_DECLARATION.md)。声明范围外的录入/模板匹配、同会话第二次采集、异常复位恢复、其他设备/固件、DFU、PAM/fprintd 与上游接受度均未验证。
+> **支持范围/未支持项/偏离**：见 [`docs/m6/SUPPORT_DECLARATION.md`](docs/m6/SUPPORT_DECLARATION.md)。M6 声明范围外的录入/模板匹配已由 M7.2 的 SIGFM 路径在 in-process 探针中验证（见 M7.2）；fprintd/PAM、同会话第二次采集、异常复位恢复、其他设备/固件、DFU 与上游接受度仍未验证。
 >
 > 下方 2026-10-18 的验证回顾与各轮记录保留为历史，其中“根因未定/失败点不在驱动侧/不得宣称 M6 通过”的结论已被本轮证据取代。
 
@@ -469,27 +469,19 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 ### M7.2 enroll / verify / identify
 
-- [ ] `fprintd-enroll`：一次 enroll 完成默认 5 段采集，生成 `FPI_PRINT_NBIS` print；失败轮可重试，取消可恢复。
+- [x] **NBIS 评估**：112×88 图像只有 1 个 verify 细节点、3–5 个模板细节点；BZ3 全部 0/40。NBIS 硬门 `MIN_COMPUTABLE_BOZORTH_MINUTIAE=10` 在低于 10 时直接返回 0，调阈值无效。
+- [x] **替换 matcher**：接入 SIGFM（OpenCV SIFT + ratio + 几何一致性），`score_threshold=10`；新增 `enroll_coverage_shift=12` 的覆盖引导注册。
+- [ ] `fprintd-enroll`：通过 daemon 完成默认 5 段采集；失败轮可重试，取消可恢复。
 - [ ] `fprintd-verify`：同一手指成功、不同手指失败；连续 3 次 enroll→verify 可重复。
 - [ ] `fprintd-identify`：至少两个已录入 print 中选择正确者；不匹配时失败而非误报。
-- [ ] 评估 112×88 图像的 NBIS 细节点数量与 `bz3_threshold=40`；若匹配率不足，只允许主机侧图像/阈值调优，不猜测设备协议。
 - [ ] `fprintd-list` / `fprintd-delete`：主机侧存储的 print 可列出、删除、重录。
 - [ ] 记录 FRR/FAR 的粗略样本（不是安全认证结论），至少覆盖成功/失败/重试。
 
 **完成判据**：enroll/verify/identify 在目标设备上可重复通过；失败路径不产生假成功；阈值与图像质量有记录。
 
-**2026-10-21 实测阻断**：libfprint 的 NBIS 在 112×88 图像上只提取到 **1 个 verify 细节点、3–5 个模板细节点**；5 个模板的 BZ3 分数全部 **0/40**。同一手指、enroll 5/5 成功。像素反转后为 3/3–5，2× 最近邻放大后仍 2–5，均无改善；这是细节点数量不足，不是阈值可修。下一步必须二选一：
-1. **替换 matcher**：SIGFM（OpenCV SIFT，已有同型号公开先例）或 BLPOC（fpmatch，C99 无依赖）；用 `FPI_PRINT_RAW` 或新增算法枚举把主机侧模板存入 print，驱动覆盖 enroll/verify/identify；需阈值标定与假接受评估。
-2. **声明不支持 fprintd verify/identify**：仅保留 capture；M7.2/M7.3 终止，M8 只能发 capture-only 实验包。
+**2026-10-21 实现与真机**：覆盖引导下注册 **5/5**（太近/无重叠会重试且不消耗阶段），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=true**。`examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；随后修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败。仍需 fprintd/PAM 端到端、identify 多模板与打包回归。
 
-在作出选择前，不得调整 `bz3_threshold`、不得声称 fprintd 可登录。
-
-**2026-10-21 受控相关性补充**：同一 open 内第 1–3 轮同指同区域、第 4–5 轮换另一根手指。同指 NCC 为 **0.308 / 0.546 / 0.325**；异指为 **0.125–0.185**；但第 4–5 轮（另一根手指）自身为 **0.448**，与同指区间重叠。结论：简单全局纹理相关不可判别，不能仅凭 NCC 实现 verify；若继续，需要旋转/局部特征匹配并做假接受标定，否则应声明 verify/identify 不支持。传感器 112×88 仅覆盖指腹小块，这是细节点少的结构性原因之一。
-**2026-10-21 8 轮扩样本否决 NCC**：1–4 同指、5–8 另一根手指。同指最大 **0.239/0.245**；交叉对最高 **0.464**（2/6），高于所有同指对；旋转搜索后仍无分离。⇒ 全局/旋转纹理相关不能用于 verify。剩余选择只有：引入局部特征匹配（ORB/SIFT 等，新增依赖与假接受标定），或声明 verify/identify 不支持。传感器小块覆盖与接触位置变化是共同限制。
-**2026-10-21 SIGFM + 覆盖引导实现**：已把 SIGFM（OpenCV SIFT）接入 `FpImageDevice`，`fpc_disum` 使用 `score_threshold=10`；新增按驱动配置的 `enroll_coverage_shift=12`，注册时对“太近”的重复图和“完全无重叠”的图分别返回重试提示，阶段不递增。真机：覆盖引导下 **5/5** 注册（多次按提示调整位置），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=false**。另外 `examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；发现并修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败；`10a5:9201` 已从 udev 未支持白名单移除。仍需单独验证 fprintd/PAM 端到端与打包。
-**2026-10-21 SIGFM 同型号方法实测**：A=右食指 6 张，B=同一右食指 4 张（另 2 轮被 libfprint 以 `Minutiae detection failed` 拒），C=另一根手指 5 张。按公开 FPC1022 做法（2× 最近邻上采样到 224×176、SIFT、ratio 0.75、几何一致性、阈值 10）复算：A→B **3/4**，B→A **2/6**，A→C **0/5**，B→C **0/5**；合计 **TAR 5/10，FAR 0/10**。5 个同指探针得分为 0，是比例/几何阶段没有足够共同区域，不是阈值截断；CLAHE、min-max 归一化、1×/2× 只改变正分幅度，不改变接受集合。⇒ SIGFM 明显优于 NBIS（NBIS 为 0/20），但未复现公开的 8/8；限制仍是 112×88 小块覆盖与接触位置，符合 fpmatch 的结论。下一步应做覆盖引导/更多模板，而不是继续调阈值。测试用 PGM 已在 `/tmp` 删除，未入库。
-**2026-10-21 公开先例检索**：同型号 FPC1022 / USB `10a5:9200/9201` 的 libfprint MR !570（驱动）依赖 SIGFM MR !530，采用 **2× 最近邻上采样到 224×176 + SIFT/SIGFM**，匹配阈值 10；MR 报告 6 段 enroll、8/8 verify，并明确 NBIS/Bozorth3 在该尺寸上基本没有稳定细节点。本地 NBIS 硬门 `MIN_COMPUTABLE_BOZORTH_MINUTIAE=10`（`libfprint/nbis/include/bozorth.h:122`，`bozorth3.c:642-671`）在任一 print 少于 10 个细节点时直接返回 0，证实 `bz3_threshold` 调参无效。另一条路线 `dragosol/fpmatch` 用 BLPOC（相位相关）绕开细节点，C99 无依赖，但其 144×64 实测仍有小块重叠上限（离线 18.8%、实机 70.6% TAR）。⇒ 若继续 verify，优先评估 SIGFM；它是公开先例而非本净室规格基线，采用需作为设计变更并重新标定/复核。
-**2026-10-21 预览与一致性检查**：对单次采集做 2×2/半块终端预览（不落盘）并用局部梯度结构张量评估，平均方向一致性 **0.866**，存在连续脊线方向，不是随机噪声或明显的像素转置/错位。⇒ 采集字节、TLS 解密、像素布局没有发现错误；限制主要在 112×88 仅覆盖指腹小块、接触位置变化，以及 NBIS 对该尺度不适用。预览入口为一次性诊断，未保留在工具中。
+**历史依据**：NBIS 阈值、NCC 相关性和 8 轮扩样本的失败记录已被 SIGFM 实现取代，保留在 git 历史（commit `5ac0648`、`70adc30`、`b0d9391`）；不再作为当前实现路径。
 
 ### M7.3 fprintd daemon 生命周期与系统集成
 
