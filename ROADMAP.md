@@ -440,6 +440,90 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 - **剩余最可信差异（待规格侧确认）**：本机所有尝试都是**几十秒内连续会话**（每次 `CMD_INIT` 都复位设备），而 §16.4 记载"reset 后约 7 分钟内 `EVT_FINGER_DWN` 不可信"；规格侧成功采集很可能是**间隔较久**的单次运行。
 - 本侧下一步（**不改契约、不猜设备**）：设备**空闲 ≥10 分钟**后跑一次单次采集；若成功则补齐 `cancel-reopen`／`reopen` 并更新 M6 条目。
 
+## M7：AUR 打包与分发（方案：libfprint fork 的 drop-in 替换包）
+
+**目标**：在 Arch Linux / AUR 上提供 `libfprint-fpc-disum`，以源码构建的 libfprint fork 替换系统 `libfprint`，让现有 `fprintd` 无需修改即可枚举并使用 `10a5:9201`。不打包厂商二进制、不替换 fprintd、不做独立 D-Bus 守护进程。
+
+**范围**：x86_64；`fprintd` 1.94.x；`libfprint` 1.94.100 基线；设备 `10a5:9201 / bcdDevice 0x0250`；LGPL-2.1-or-later。其他设备/固件、TOD 二进制、PAM 策略定制不在本里程碑。
+
+### M7.0 发布前决策与冻结
+
+- [ ] 确定公开源码地址与稳定 tag/commit（AUR 必须能匿名拉取；当前本地仓库不能直接作为 `source`）。
+- [ ] 固定 `pkgver=1.94.100`、`pkgrel=1`、上游 commit、驱动/核心补丁清单、净室规格哈希。
+- [ ] 确定包名：稳定包 `libfprint-fpc-disum`；可选 VCS 包 `libfprint-fpc-disum-git`。
+- [ ] 写明替换系统库的影响：所有指纹设备都改用本 fork；用户必须显式安装。
+- [ ] 许可证与 NOTICE：保留上游 `COPYING`、版权与 LGPL；声明 fork 的核心 USB 扩展。
+
+**完成判据**：源码 URL、tag、哈希、包名、维护者、支持范围写死，后续阶段不再改方案。
+
+### M7.1 PKGBUILD 与包骨架
+
+- [ ] `pkgname=libfprint-fpc-disum`，`arch=('x86_64')`，`license=('LGPL-2.1-or-later')`。
+- [ ] `provides=('libfprint' 'libfprint-2.so=2-64')`；`conflicts=('libfprint')`；不设 `replaces`。
+- [ ] `depends=(libgcc glib2 glibc libgudev libgusb libusb openssl pixman)`；`makedepends=(meson ninja gcc pkgconf python)`；按实际 Meson 选项补 `git`。
+- [ ] `source` 指向固定 tag/commit；稳定包使用可校验归档，`sha256sums` 非 `SKIP`；VCS 包单独提供 `pkgver()`。
+- [ ] `build()`：Meson 构建完整 libfprint（保留其他驱动），关闭文档/introspection，不裁剪驱动；`package()` 用 `meson install --destdir`。
+- [ ] `install` 脚本只做提示：重启 `fprintd`、运行 `fprintd-list`；不自动启用 PAM、不改 `/etc/pam.d`。
+- [ ] 生成并提交 `.SRCINFO`；`namcap PKGBUILD` 与 `namcap` 产物包无错误。
+
+**完成判据**：`makepkg --cleanbuild --check` 成功；包内只有源码构建产物，无预编译二进制。
+
+### M7.2 干净构建与 ABI 校验
+
+- [ ] 在干净 chroot（devtools `extra-x86_64-build`）构建，不依赖本机 `_build`。
+- [ ] 校验 soname/符号：`readelf -d` 的 `SONAME` 为 `libfprint-2.so.2`；`provides` 的 `libfprint-2.so=2-64` 与官方一致；公共符号版本未被破坏。
+- [ ] `pacman -U` 安装时只与 `libfprint` 冲突；`fprintd` 依赖仍满足；`ldd /usr/lib/fprintd` 解析到新库。
+- [ ] 运行 `fprintd-list`、`fprintd-enroll`、`fprintd-verify` 的最小冒烟（见 M7.4）。
+
+**完成判据**：chroot 构建可复现；安装/升级不产生未声明文件冲突；`fprintd` 能启动。
+
+### M7.3 安装、升级与回滚
+
+- [ ] 安装流程：`pacman -U` 替换 `libfprint` → `systemctl restart fprintd` → `fprintd-list` 看到设备。
+- [ ] 升级流程：AUR 包 `pkgrel`/上游 tag 变更后重建；`pacman -Syu` 不会静默换回官方库；在包说明中写明需手动更新。
+- [ ] 回滚：卸载本包后重装官方 `libfprint`，`fprintd` 恢复；不残留驱动私有文件。
+- [ ] 记录其他指纹设备的影响；至少验证枚举不崩溃，无法实测的型号在包页标注风险。
+
+**完成判据**：安装、升级、卸载/回滚三步均有可复现命令与结果记录。
+
+### M7.4 功能验收（发布门槛）
+
+- [ ] `fprintd-list` 显示 `FPC Disum Fingerprint Sensor`。
+- [ ] `fprintd-enroll`：一次 enroll 内完成默认 5 段采集；验证同会话多次 capture。
+- [ ] `fprintd-verify`：使用刚录入的 print 成功匹配；错误手指失败；取消可恢复。
+- [ ] `fprintd-delete` / `fprintd-list`：print 存储与删除正常。
+- [ ] `fprintd` 重启、suspend/resume、重新登录后设备仍可用。
+- [ ] 负例：无手指 enroll/verify 超时；取消后 daemon 不挂起。
+- [ ] 与 M6 真机证据分开记录：M6 证明采集；M7.4 证明 fprintd 端到端。
+
+**门槛**：M7.4 未全部通过时，只能发布 `-git`/实验包并在包页明确标注“capture-only，不可用于登录”；不得发布稳定包或宣称 fprintd 可用。
+
+### M7.5 AUR 发布
+
+- [ ] 提交 `libfprint-fpc-disum`（及可选 `-git`）到 AUR；包页写明支持设备、固件、已验证 fprintd 版本、未支持项、回滚方法。
+- [ ] 附净室规格/向量哈希、上游 commit、M6 支持声明、真机 run_id（不含图像/密钥）。
+- [ ] 版本策略：上游 libfprint 升级或 fprintd soname 变化时重建；驱动补丁 rebase 记录。
+- [ ] 安全与隐私：不收集指纹图像；包不写用户目录；不修改 PAM 默认配置。
+
+**完成判据**：AUR 包可被干净系统安装；包页信息足以让用户判断风险与回滚。
+
+### M7.6 上游化与退役
+
+- [ ] 将驱动与核心 USB 重取扩展提交上游；处理 review、ABI/风格与测试要求。
+- [ ] 上游接受后，AUR 包改为跟踪正式版或标记 deprecated；删除 drop-in 替换说明。
+- [ ] 若上游拒绝，保留 AUR 维护分支并记录每版 rebase 成本。
+
+**完成判据**：上游 MR 状态明确；AUR 包有继续维护或退役的决定。
+
+### 风险与边界
+
+- **替换系统库影响所有设备**：无法只对 FPC 生效；包页必须警告。
+- **fprintd/ABI 漂移**：soname 或依赖变化会导致重建；稳定包需固定兼容窗口。
+- **enroll/verify 未验证**：这是当前最大功能风险；M7.4 是硬门槛。
+- **AUR 政策**：`provides/conflicts` 替换核心库属于高影响包；不自动启用 PAM，不静默替换。
+- **源码公开**：没有匿名可拉取的 tag，AUR 包无法构建；M7.0 必须先解决。
+- **其他传感器回归**：构建保留全部驱动，但只对目标设备做真机验收；其余仅做枚举冒烟。
+
 ## 开发规则
 
 1. 每个里程碑先写能捕获真实边界/状态错误的测试，再实现；构造人工输入不等于被测 C 实现已通过。

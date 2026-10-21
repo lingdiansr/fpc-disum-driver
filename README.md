@@ -46,10 +46,11 @@ sha256sum -c docs/SHA256SUMS
 
 ## 开发路线与当前状态
 
-- [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收。
+- [ROADMAP.md](ROADMAP.md)：M0 工程初始化、M0.1 质量工具链、M1 协议解析、M2 envelope、M3 TLS、M4 USB 状态机、M5 内置驱动、M6 受控验收、M7 AUR 打包与分发（规划中）。
 - 上游：`https://gitlab.freedesktop.org/libfprint/libfprint.git`，tag `v1.94.100`，
   commit `80a4b5ec612892c5c056c48dddaa561452cf37ec`。保留上游 `COPYING`、版权及开发约定（LGPL-2.1-or-later）。
 - **当前状态：M0–M6 已在声明范围内完成。** 2026-10-20 修复初始化读取缺口后，真机已通过：单次采集（初始化 5 帧/247 B，含 `EVT_INIT_RESULT`；17 帧/10,878 B，112×88/9856 B）、无手指负例、取消、取消后再采集、close/reopen 两次采集（两图不同）。支持与未支持范围见 [docs/m6/SUPPORT_DECLARATION.md](docs/m6/SUPPORT_DECLARATION.md)。**这不等于上游 libfprint 接受、PAM/fprintd 可用、录入/模板匹配已验证或异常复位恢复已支持。**
+- **分发路线**：M7 计划以 `libfprint-fpc-disum` 的 AUR drop-in 包替换系统 libfprint，fprintd 保持不变；发布门槛是 fprintd enroll/verify 真机通过，详见 [ROADMAP.md](ROADMAP.md) 的 M7。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_proto.c`（12B 大端外层帧、应用消息分帧、图像定位），不依赖 USB，由原生测试直接驱动。
 - 已实现 `libfprint/drivers/fpc_disum/fpc_disum_tls.c`（GET_TLS_KEY envelope 验签与 PSK 解密，OpenSSL 3 的 AES-256-CBC NoPadding 与 HMAC-SHA256），失败时按规格阶段拒绝并擦除密钥材料。
 - 同一模块提供 TLS-PSK 通道：宿主为 server，TLS 1.2 + `PSK-AES128-CBC-SHA256`，校验 `Disum PSK` 身份，memory BIO 驱动握手，输出按 64 B 上限分片；通道不自己计时，调用方决定超时，释放即取消。
