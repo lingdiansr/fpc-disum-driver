@@ -38,7 +38,6 @@
 
 /* SPEC §1/§3.2: the only data endpoint is 0x82 IN BULK, maxPacketSize 64. */
 #define FPC_DISUM_USB_BULK_IN_EP 0x82
-#define FPC_DISUM_USB_BULK_READ_SIZE 64
 #define FPC_DISUM_USB_BULK_TIMEOUT_MS 200
 
 /* SPEC §1: a single interface, num 0, alt 0. */
@@ -68,6 +67,8 @@
 /* A complete root-to-leaf port chain never exceeds this (USB 2.0/3.x). */
 #define FPC_DISUM_USB_MAX_PORTS 8
 
+/* The read queue bound is declared in fpc_disum_usb.h so tests observe it. */
+
 /* Vendor control request types (wIndex is always 0). */
 #define FPC_DISUM_USB_BM_REQUEST_OUT 0x40
 #define FPC_DISUM_USB_BM_REQUEST_IN 0xC0
@@ -81,7 +82,12 @@ typedef enum
 {
   FPC_DISUM_USB_OP_CONTROL_OUT,
   FPC_DISUM_USB_OP_CONTROL_IN,
+  /* One actual read URB owned by the continuous reader. */
   FPC_DISUM_USB_OP_BULK_READ,
+  /* The single session read waiting for the next read outcome. */
+  FPC_DISUM_USB_OP_READ_WAIT,
+  /* A queued read outcome being handed to a session callback. */
+  FPC_DISUM_USB_OP_READ_DELIVER,
   FPC_DISUM_USB_OP_REOPEN,
 } FpcDisumUsbOpKind;
 
@@ -89,11 +95,28 @@ typedef enum
 {
   /* A GET_DESCRIPTOR probe is running on the handle currently bound. */
   FPC_DISUM_USB_REOPEN_PROBE_OLD,
+  /* The old read URB is being cancelled and must be reaped first. */
+  FPC_DISUM_USB_REOPEN_REAP,
   /* No usable handle: waiting for the full identity to reappear. */
   FPC_DISUM_USB_REOPEN_WAIT,
   /* A candidate has been opened and claimed; its probe is running. */
   FPC_DISUM_USB_REOPEN_PROBE_NEW,
 } FpcDisumUsbReopenStage;
+
+/* One completed read kept for a later session read. */
+typedef struct
+{
+  guint8 *data; /* owned */
+  gsize len;
+  FpcDisumTransportStatus status;
+} FpcDisumUsbChunk;
+
+static void
+read_chunk_free (FpcDisumUsbChunk *chunk)
+{
+  g_free (chunk->data);
+  g_free (chunk);
+}
 
 /* The physical identity the raw handle is bound to, plus address (observation
  * only).  The complete port chain is kept; it is never truncated. */
@@ -141,12 +164,17 @@ struct _FpcDisumUsbOp
   gboolean cancel_requested;
   gboolean slot_error;
 
+  /* READ_DELIVER: status handed to the waiting session read. */
+  FpcDisumTransportStatus deliver_status;
+
   FpcDisumTransportDoneFunc done;
   FpcDisumTransportDataFunc data_done;
   gpointer user_data;
 
   /* Reopen state. */
   gint64 deadline_us;
+  gint64 reap_deadline_us;
+  gboolean reap_forced;
   FpcDisumUsbReopenStage stage;
   GSource *retry_source;
   libusb_device_handle *probe_handle;
@@ -169,7 +197,23 @@ struct _FpcDisumUsbPrivate
   gboolean notifiers_installed;
 
   GQueue completions; /* FpcDisumUsbOp*, completed and awaiting delivery */
-  FpcDisumUsbOp *in_flight;
+
+  /*
+   * Controls (including reopen) own at most one slot; the continuous read
+   * reader owns a second, independent URB.  A read URB is therefore never a
+   * reason to refuse a control.
+   */
+  FpcDisumUsbOp *control_op;
+  FpcDisumUsbOp *read_op;
+  /* At most one session read may wait for the next outcome. */
+  FpcDisumUsbOp *read_waiter;
+  GQueue read_queue; /* FpcDisumUsbChunk*, completed data awaiting a reader */
+  gsize read_queue_bytes;
+  guint64 read_dropped;
+  gboolean read_enabled;
+  gboolean read_paused;
+  FpcDisumTransportStatus read_pause_status;
+
   gboolean torn_down;
 
   FpiUsbIdentity identity; /* owned; the complete physical identity */
@@ -202,7 +246,11 @@ static void priv_unref (FpcDisumUsbPrivate *priv);
 static void op_free (FpcDisumUsbOp *op);
 static void drain_completions (FpcDisumUsbPrivate *priv);
 static void reopen_attempt (FpcDisumUsbOp *op);
+static void reopen_begin (FpcDisumUsbOp *op);
+static void reopen_reap_stop (FpcDisumUsbOp *op);
 static void reopen_transfer_completed (FpcDisumUsbOp *op);
+static void read_start (FpcDisumUsbPrivate *priv, FpcDisumTransport *transport);
+static void read_completed (FpcDisumUsbOp *op);
 
 static FpcDisumUsbPrivate *
 priv_ref (FpcDisumUsbPrivate *priv)
@@ -639,15 +687,15 @@ op_take_slot (FpcDisumUsbPrivate *priv, FpcDisumUsbOp *op)
       return FALSE;
     }
 
-  if (priv->in_flight != NULL)
+  if (priv->control_op != NULL)
     {
-      g_warning ("FPC Disum transport: an operation is already in flight");
+      g_warning ("FPC Disum transport: a control operation is already in flight");
       op->slot_error = TRUE;
       op_queue_delivery (priv, op);
       return FALSE;
     }
 
-  priv->in_flight = op;
+  priv->control_op = op;
 
   return TRUE;
 }
@@ -728,8 +776,8 @@ deliver_transfer_op (FpcDisumUsbOp *op)
   gsize actual = 0;
   gint native;
 
-  if (priv->in_flight == op)
-    priv->in_flight = NULL;
+  if (priv->control_op == op)
+    priv->control_op = NULL;
 
   if (priv->torn_down)
     {
@@ -778,6 +826,242 @@ deliver_transfer_op (FpcDisumUsbOp *op)
   op_free (op);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Continuous bulk reader                                                     */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Hand one read outcome to the single waiting session read.  The delivery is
+ * queued, so it never runs inside a libusb callback or re-enters a caller that
+ * is still stepping.  The buffer (when any) is adopted only if there really is
+ * a waiter, and is freed otherwise.
+ */
+static void
+read_waiter_queue (
+    FpcDisumUsbPrivate *priv, FpcDisumTransportStatus status, guint8 *data, gsize len)
+{
+  FpcDisumUsbOp *waiter = priv->read_waiter;
+
+  if (waiter == NULL)
+    {
+      g_free (data);
+      return;
+    }
+
+  priv->read_waiter = NULL;
+  waiter->kind = FPC_DISUM_USB_OP_READ_DELIVER;
+  waiter->deliver_status = status;
+  waiter->buffer = data;
+  waiter->buffer_len = len;
+  op_queue_delivery (priv, waiter);
+}
+
+static void
+deliver_read_op (FpcDisumUsbOp *op)
+{
+  FpcDisumUsbPrivate *priv = op->priv;
+
+  /* No callback, no free of caller resources beyond the transfer itself after
+   * teardown: the operation is only ever released exactly once. */
+  if (!priv->torn_down && op->data_done != NULL)
+    op->data_done (op->transport, op->deliver_status, op->buffer, op->buffer_len, op->user_data);
+
+  op_free (op);
+}
+
+/*
+ * Adopt a completed read.  The oldest data is kept: the bound drops the newest
+ * chunk and counts it, because EVT_INIT_RESULT is emitted early in the reset
+ * window.  Always consumes @data.
+ */
+static void
+read_queue_push (FpcDisumUsbPrivate *priv, guint8 *data, gsize len, FpcDisumTransportStatus status)
+{
+  FpcDisumUsbChunk *chunk;
+
+  if (data == NULL || len == 0)
+    {
+      g_free (data);
+      return;
+    }
+
+  if (priv->read_queue_bytes + len > FPC_DISUM_USB_READ_QUEUE_MAX_BYTES)
+    {
+      priv->read_dropped++;
+      fp_dbg ("read queue full: dropped %" G_GUINT64_FORMAT " chunk(s) so far", priv->read_dropped);
+      g_free (data);
+      return;
+    }
+
+  chunk = g_new0 (FpcDisumUsbChunk, 1);
+  chunk->data = data;
+  chunk->len = len;
+  chunk->status = status;
+  g_queue_push_tail (&priv->read_queue, chunk);
+  priv->read_queue_bytes += len;
+}
+
+/*
+ * Submit one read URB without touching the reader's enabled/paused state.
+ * Used both by the normal continuous reader and by the reopen reap window,
+ * which keeps draining the old endpoint while the session read is disabled.
+ */
+static void
+read_submit (FpcDisumUsbPrivate *priv, FpcDisumTransport *transport)
+{
+  FpcDisumUsbOp *op;
+
+  if (priv->torn_down || priv->handle == NULL || priv->read_op != NULL)
+    return;
+
+  op = op_new (transport, FPC_DISUM_USB_OP_BULK_READ);
+  op->is_control = FALSE;
+  op->direction_in = TRUE;
+  op->request = FPC_DISUM_USB_BULK_IN_EP;
+  op->requested_length = FPC_DISUM_USB_BULK_READ_SIZE;
+  op->buffer_len = FPC_DISUM_USB_BULK_READ_SIZE;
+  op->buffer = g_malloc (op->buffer_len);
+  op->transfer = libusb_alloc_transfer (0);
+  if (op->transfer != NULL)
+    libusb_fill_bulk_transfer (op->transfer, priv->handle, FPC_DISUM_USB_BULK_IN_EP, op->buffer,
+        FPC_DISUM_USB_BULK_READ_SIZE, transfer_completed_cb, op, FPC_DISUM_USB_BULK_TIMEOUT_MS);
+
+  priv->read_op = op;
+
+  fp_dbg ("bulk read EP 0x%02x (capacity %u B, timeout %u ms)", FPC_DISUM_USB_BULK_IN_EP,
+      FPC_DISUM_USB_BULK_READ_SIZE, FPC_DISUM_USB_BULK_TIMEOUT_MS);
+
+  op_submit (op);
+}
+
+/*
+ * Start (or restart) the backend-owned read URB.  The read is independent of
+ * the session's bulk_read() call: it must already be outstanding before
+ * CMD_INIT and must stay outstanding across the reset in which no session read
+ * is waiting.
+ */
+static void
+read_start (FpcDisumUsbPrivate *priv, FpcDisumTransport *transport)
+{
+  if (priv->torn_down || priv->handle == NULL || priv->read_op != NULL)
+    return;
+
+  priv->read_enabled = TRUE;
+  priv->read_paused = FALSE;
+  priv->read_pause_status = FPC_DISUM_TRANSPORT_OK;
+
+  read_submit (priv, transport);
+}
+
+/*
+ * A continuous read URB finished.  Data is queued for a later session read (or
+ * handed to the one waiter); a terminal status pauses the reader instead of
+ * failing the session, which is what makes a reset during CMD_INIT harmless.
+ */
+static void
+read_completed (FpcDisumUsbOp *op)
+{
+  FpcDisumUsbPrivate *priv = op->priv;
+  FpcDisumTransport *transport = op->transport;
+  FpcDisumTransportStatus status;
+  gboolean actual_known = FALSE;
+  gboolean terminal;
+  gsize actual = 0;
+  gint native;
+
+  if (priv->read_op == op)
+    priv->read_op = NULL;
+
+  if (priv->torn_down)
+    {
+      op_free (op);
+      return;
+    }
+
+  if (!op->submitted)
+    {
+      status = status_from_submit_error (op->submit_error);
+      native = op->submit_error;
+      terminal = TRUE;
+    }
+  else
+    {
+      status = status_from_transfer ((enum libusb_transfer_status)op->native_status);
+      native = op->native_status;
+      actual_known = op_payload_length (op, &actual);
+      if (!actual_known)
+        {
+          actual = 0;
+          if (status == FPC_DISUM_TRANSPORT_OK || status == FPC_DISUM_TRANSPORT_TIMEOUT)
+            status = FPC_DISUM_TRANSPORT_ERROR_INTEGRITY_UNKNOWN;
+        }
+      terminal = status != FPC_DISUM_TRANSPORT_OK && status != FPC_DISUM_TRANSPORT_TIMEOUT;
+    }
+
+  if (op->cancel_requested)
+    diag_emit_completion (priv, op, FPC_DISUM_DIAGNOSTIC_KIND_CANCEL_COMPLETE, status, native,
+        actual_known, actual, op->completed_us);
+
+  diag_emit_completion (priv, op, FPC_DISUM_DIAGNOSTIC_KIND_COMPLETE, status, native, actual_known,
+      actual, op->completed_us);
+
+  if (actual_known && actual > 0)
+    {
+      /* A non-zero tail is reported with its real status, cancellation and
+       * timeout included, exactly like the old session-owned read. */
+      guint8 *data = op->buffer;
+
+      op->buffer = NULL;
+      if (priv->read_waiter != NULL)
+        read_waiter_queue (priv, status, data, actual);
+      else
+        read_queue_push (priv, data, actual, status);
+    }
+  else if (priv->read_waiter != NULL)
+    {
+      read_waiter_queue (priv, status, NULL, 0);
+    }
+
+  if (terminal)
+    {
+      priv->read_enabled = FALSE;
+      priv->read_paused = TRUE;
+      priv->read_pause_status = status;
+
+      op_free (op);
+    }
+  else
+    {
+      op_free (op);
+
+      if (priv->read_enabled)
+        read_start (priv, transport);
+    }
+
+  if (priv->control_op != NULL && priv->control_op->kind == FPC_DISUM_USB_OP_REOPEN
+      && priv->control_op->stage == FPC_DISUM_USB_REOPEN_REAP)
+    {
+      FpcDisumUsbOp *reopen = priv->control_op;
+      gboolean expired
+          = reopen->reap_deadline_us != 0 && g_get_monotonic_time () >= reopen->reap_deadline_us;
+
+      if (terminal || reopen->cancel_requested || reopen->reap_forced || expired)
+        {
+          /* The old URB has been reaped (or the grace bound was reached after
+           * this real completion); the handle may now be swapped. */
+          reopen_reap_stop (reopen);
+          reopen_begin (reopen);
+        }
+      else
+        {
+          /* The reset has not ended the old read yet: keep draining EP 0x82
+           * on the old handle so no initialisation frame is lost.  A timeout
+           * is not a reap: the reader must stay outstanding. */
+          read_submit (priv, transport);
+        }
+    }
+}
+
 static void
 drain_completions (FpcDisumUsbPrivate *priv)
 {
@@ -785,11 +1069,25 @@ drain_completions (FpcDisumUsbPrivate *priv)
 
   while ((op = g_queue_pop_head (&priv->completions)) != NULL)
     {
-      if (op->kind == FPC_DISUM_USB_OP_REOPEN)
-        reopen_transfer_completed (op);
-      else
+      switch (op->kind)
         {
+        case FPC_DISUM_USB_OP_REOPEN:
+          reopen_transfer_completed (op);
+          break;
+        case FPC_DISUM_USB_OP_BULK_READ:
+          read_completed (op);
+          break;
+        case FPC_DISUM_USB_OP_READ_DELIVER:
+          deliver_read_op (op);
+          break;
+        case FPC_DISUM_USB_OP_CONTROL_OUT:
+        case FPC_DISUM_USB_OP_CONTROL_IN:
           deliver_transfer_op (op);
+          break;
+        case FPC_DISUM_USB_OP_READ_WAIT:
+          /* A waiter is never queued for delivery. */
+          g_assert_not_reached ();
+          break;
         }
     }
 }
@@ -899,28 +1197,57 @@ fpc_disum_usb_bulk_read (
 
   priv = transport_priv (transport);
 
-  op = op_new (transport, FPC_DISUM_USB_OP_BULK_READ);
-  op->is_control = FALSE;
-  op->direction_in = TRUE;
-  op->request = FPC_DISUM_USB_BULK_IN_EP;
-  op->requested_length = FPC_DISUM_USB_BULK_READ_SIZE;
-  op->data_done = done;
-  op->user_data = user_data;
-  op->buffer_len = FPC_DISUM_USB_BULK_READ_SIZE;
-  op->buffer = g_malloc (op->buffer_len);
-
-  if (!op_take_slot (priv, op))
+  if (priv->torn_down)
     return;
 
-  op->transfer = libusb_alloc_transfer (0);
-  if (op->transfer != NULL)
-    libusb_fill_bulk_transfer (op->transfer, priv->handle, FPC_DISUM_USB_BULK_IN_EP, op->buffer,
-        FPC_DISUM_USB_BULK_READ_SIZE, transfer_completed_cb, op, FPC_DISUM_USB_BULK_TIMEOUT_MS);
+  if (priv->read_waiter != NULL)
+    {
+      /* Exactly one session read may wait; a second one is a caller error and
+       * still completes exactly once rather than vanishing. */
+      g_warning ("FPC Disum transport: a bulk read is already waiting");
+      op = op_new (transport, FPC_DISUM_USB_OP_READ_DELIVER);
+      op->deliver_status = FPC_DISUM_TRANSPORT_ERROR_IO;
+      op->data_done = done;
+      op->user_data = user_data;
+      op_queue_delivery (priv, op);
+      return;
+    }
 
-  fp_dbg ("bulk read EP 0x%02x (capacity %u B, timeout %u ms)", FPC_DISUM_USB_BULK_IN_EP,
-      FPC_DISUM_USB_BULK_READ_SIZE, FPC_DISUM_USB_BULK_TIMEOUT_MS);
+  if (!g_queue_is_empty (&priv->read_queue))
+    {
+      FpcDisumUsbChunk *chunk = g_queue_pop_head (&priv->read_queue);
 
-  op_submit (op);
+      priv->read_queue_bytes -= chunk->len;
+
+      op = op_new (transport, FPC_DISUM_USB_OP_READ_DELIVER);
+      op->deliver_status = chunk->status;
+      op->data_done = done;
+      op->user_data = user_data;
+      op->buffer = chunk->data;
+      op->buffer_len = chunk->len;
+      chunk->data = NULL;
+      g_free (chunk);
+
+      op_queue_delivery (priv, op);
+      return;
+    }
+
+  if (priv->read_paused)
+    {
+      /* The reader is paused (reset/terminal).  Do not hang the caller: report
+       * the pause status once through the normal delivery path. */
+      op = op_new (transport, FPC_DISUM_USB_OP_READ_DELIVER);
+      op->deliver_status = priv->read_pause_status;
+      op->data_done = done;
+      op->user_data = user_data;
+      op_queue_delivery (priv, op);
+      return;
+    }
+
+  op = op_new (transport, FPC_DISUM_USB_OP_READ_WAIT);
+  op->data_done = done;
+  op->user_data = user_data;
+  priv->read_waiter = op;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1069,8 +1396,8 @@ reopen_finish (FpcDisumUsbOp *op, FpcDisumTransportStatus status)
 {
   FpcDisumUsbPrivate *priv = op->priv;
 
-  if (priv->in_flight == op)
-    priv->in_flight = NULL;
+  if (priv->control_op == op)
+    priv->control_op = NULL;
 
   if (priv->torn_down)
     {
@@ -1187,6 +1514,84 @@ reopen_schedule (FpcDisumUsbOp *op)
 }
 
 static void
+reopen_reap_stop (FpcDisumUsbOp *op)
+{
+  if (op->retry_source != NULL)
+    {
+      g_source_destroy (op->retry_source);
+      g_source_unref (op->retry_source);
+      op->retry_source = NULL;
+    }
+}
+
+/*
+ * The reap window expired without a terminal read completion.  Stop waiting:
+ * cancel the old URB (the reopen still waits for that real completion before
+ * touching the handle) and let the normal completion path continue.
+ */
+static gboolean
+reap_expired_cb (gpointer user_data)
+{
+  FpcDisumUsbOp *op = user_data;
+  FpcDisumUsbPrivate *priv = op->priv;
+  GSource *source = g_main_current_source ();
+
+  op->retry_source = NULL;
+
+  if (source != NULL)
+    g_source_unref (source);
+
+  if (priv->torn_down)
+    return G_SOURCE_REMOVE;
+
+  fp_dbg ("the old read URB did not report a reset before the reap grace expired");
+
+  op->reap_forced = TRUE;
+
+  if (priv->read_op != NULL)
+    {
+      if (priv->read_op->transfer != NULL && priv->read_op->submitted && !priv->read_op->completed)
+        {
+          priv->read_op->cancel_requested = TRUE;
+          libusb_cancel_transfer (priv->read_op->transfer);
+          g_main_context_wakeup (priv->main_context);
+        }
+
+      /* read_completed() continues the reopen after the real completion. */
+      return G_SOURCE_REMOVE;
+    }
+
+  reopen_begin (op);
+
+  return G_SOURCE_REMOVE;
+}
+
+/*
+ * Wait for the old read URB to be ended by the reset, but never longer than
+ * min(grace, reopen deadline).  At the bound the URB is cancelled and reaped,
+ * so a read that only times out cannot stall the reopen.
+ */
+static void
+reopen_reap_schedule (FpcDisumUsbOp *op)
+{
+  FpcDisumUsbPrivate *priv = op->priv;
+  gint64 now = g_get_monotonic_time ();
+  gint64 reap_deadline = now + (gint64)FPC_DISUM_USB_READ_REAP_GRACE_MS * 1000;
+  guint wait_ms;
+
+  if (op->deadline_us != 0 && op->deadline_us < reap_deadline)
+    reap_deadline = op->deadline_us;
+
+  op->reap_deadline_us = reap_deadline;
+
+  wait_ms = reap_deadline > now ? (guint)((reap_deadline - now + 999) / 1000) : 0;
+
+  op->retry_source = g_timeout_source_new (wait_ms);
+  g_source_set_callback (op->retry_source, reap_expired_cb, op, NULL);
+  g_source_attach (op->retry_source, priv->main_context);
+}
+
+static void
 reopen_attempt (FpcDisumUsbOp *op)
 {
   FpcDisumUsbPrivate *priv = op->priv;
@@ -1274,8 +1679,8 @@ reopen_transfer_completed (FpcDisumUsbOp *op)
 
   if (priv->torn_down)
     {
-      if (priv->in_flight == op)
-        priv->in_flight = NULL;
+      if (priv->control_op == op)
+        priv->control_op = NULL;
       close_probe_raw (op);
       op_free (op);
       return;
@@ -1325,6 +1730,9 @@ reopen_transfer_completed (FpcDisumUsbOp *op)
           g_clear_object (&priv->core_candidate);
           if (fpi_device_usb_is_reenumeration_expected (priv->device))
             priv->core_candidate = fpi_device_usb_ref_reenumeration_candidate (priv->device);
+          /* The reader was reaped for the probe; put it back before the
+           * session learns that the reopen finished. */
+          read_start (priv, op->transport);
           reopen_finish (op, FPC_DISUM_TRANSPORT_OK);
           return;
         }
@@ -1353,6 +1761,9 @@ reopen_transfer_completed (FpcDisumUsbOp *op)
           priv->bound.bus, priv->bound.address, FPC_DISUM_USB_CONFIGURATION,
           FPC_DISUM_USB_INTERFACE);
 
+      /* Interface 0 is claimed on the new handle; restart the continuous
+       * reader before the reopen callback can step the session. */
+      read_start (priv, op->transport);
       reopen_finish (op, FPC_DISUM_TRANSPORT_OK);
       return;
     }
@@ -1360,6 +1771,36 @@ reopen_transfer_completed (FpcDisumUsbOp *op)
   close_probe_raw (op);
   op->stage = FPC_DISUM_USB_REOPEN_WAIT;
   reopen_schedule (op);
+}
+
+static void
+reopen_begin (FpcDisumUsbOp *op)
+{
+  FpcDisumUsbPrivate *priv = op->priv;
+
+  if (priv->torn_down)
+    {
+      close_probe_raw (op);
+      op_free (op);
+      return;
+    }
+
+  if (op->cancel_requested)
+    {
+      reopen_finish (op, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+      return;
+    }
+
+  if (priv->handle != NULL)
+    {
+      /* The reconnect may not have involved a departure: keep the handle when
+       * it still answers a standard descriptor request. */
+      op->stage = FPC_DISUM_USB_REOPEN_PROBE_OLD;
+      reopen_submit_probe (op, priv->handle);
+      return;
+    }
+
+  reopen_attempt (op);
 }
 
 static void
@@ -1383,16 +1824,22 @@ fpc_disum_usb_reopen (FpcDisumTransport *transport, gint64 deadline_us,
   if (!op_take_slot (priv, op))
     return;
 
-  if (priv->handle != NULL)
+  /*
+   * The old read URB is not cancelled here: it must stay outstanding across
+   * the reset so the initialisation window is drained.  Its natural terminal
+   * completion (NO_DEVICE/IO/CANCELLED/INTEGRITY_UNKNOWN) releases the handle;
+   * if that never happens, the bounded reap grace cancels and reaps it first.
+   * Data already produced stays queued for the first post-reopen read.
+   */
+  priv->read_enabled = FALSE;
+  if (priv->read_op != NULL)
     {
-      /* The reconnect may not have involved a departure: keep the handle when
-       * it still answers a standard descriptor request. */
-      op->stage = FPC_DISUM_USB_REOPEN_PROBE_OLD;
-      reopen_submit_probe (op, priv->handle);
+      op->stage = FPC_DISUM_USB_REOPEN_REAP;
+      reopen_reap_schedule (op);
       return;
     }
 
-  reopen_attempt (op);
+  reopen_begin (op);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1410,36 +1857,82 @@ fpc_disum_usb_cancel (FpcDisumTransport *transport)
   g_return_if_fail (transport != NULL);
 
   priv = transport_priv (transport);
-  op = priv->in_flight;
-  if (op == NULL || op->cancel_requested)
-    return;
 
-  op->cancel_requested = TRUE;
-
-  had_retry = op->retry_source != NULL;
-  if (had_retry)
+  /* 1. The control slot, including a reopen. */
+  op = priv->control_op;
+  if (op != NULL && !op->cancel_requested)
     {
-      g_source_destroy (op->retry_source);
-      g_source_unref (op->retry_source);
-      op->retry_source = NULL;
+      op->cancel_requested = TRUE;
+
+      had_retry = op->retry_source != NULL;
+      if (had_retry)
+        {
+          g_source_destroy (op->retry_source);
+          g_source_unref (op->retry_source);
+          op->retry_source = NULL;
+        }
+
+      if (op->kind == FPC_DISUM_USB_OP_REOPEN && op->stage == FPC_DISUM_USB_REOPEN_REAP)
+        {
+          /* The reopen is waiting for the old read URB.  Cancel that URB and
+           * let its real completion finish the reopen; never swap the handle
+           * while the URB is still in flight. */
+          if (priv->read_op != NULL)
+            {
+              if (priv->read_op->transfer != NULL && priv->read_op->submitted
+                  && !priv->read_op->completed)
+                result = libusb_cancel_transfer (priv->read_op->transfer);
+              else
+                result = LIBUSB_ERROR_NOT_FOUND;
+
+              diag_emit_cancel_request (priv, op, result);
+              g_main_context_wakeup (priv->main_context);
+            }
+          else
+            {
+              diag_emit_cancel_request (priv, op, LIBUSB_ERROR_NOT_FOUND);
+              reopen_finish (op, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+            }
+        }
+      else
+        {
+          if (op->transfer != NULL && op->submitted && !op->completed)
+            result = libusb_cancel_transfer (op->transfer);
+          else
+            result = LIBUSB_ERROR_NOT_FOUND;
+
+          diag_emit_cancel_request (priv, op, result);
+
+          /* A reopen that was waiting for its next attempt has no kernel
+           * transfer and no queued completion: the retry source was the only
+           * thing left, so finish it now.  A probe that is still in the
+           * kernel, or whose completion is already queued, must complete
+           * through that real completion. */
+          if (op->kind == FPC_DISUM_USB_OP_REOPEN && had_retry)
+            reopen_finish (op, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+        }
+
+      /* Otherwise libusb_complete() is the only thing that may complete the
+       * operation; LIBUSB_ERROR_NOT_FOUND means the completion is queued. */
     }
 
-  if (op->transfer != NULL && op->submitted && !op->completed)
-    result = libusb_cancel_transfer (op->transfer);
-  else
-    result = LIBUSB_ERROR_NOT_FOUND;
-
-  diag_emit_cancel_request (priv, op, result);
-
-  /* A reopen that was waiting for its next attempt has no kernel transfer and
-   * no queued completion: the retry source was the only thing left, so finish
-   * it now.  A probe that is still in the kernel, or whose completion is
-   * already queued, must complete through that real completion. */
-  if (op->kind == FPC_DISUM_USB_OP_REOPEN && had_retry)
-    reopen_finish (op, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
-
-  /* Otherwise libusb_complete() is the only thing that may complete the
-   * operation; LIBUSB_ERROR_NOT_FOUND means the completion is already queued. */
+  /* 2. The one waiting session read, exactly once.  When its read URB is
+   * outstanding it is cancelled and the real completion reports the tail with
+   * the CANCELLED status; otherwise the waiter is failed directly. */
+  if (priv->read_waiter != NULL)
+    {
+      if (priv->read_op != NULL && priv->read_op->transfer != NULL && priv->read_op->submitted
+          && !priv->read_op->completed)
+        {
+          priv->read_op->cancel_requested = TRUE;
+          libusb_cancel_transfer (priv->read_op->transfer);
+          g_main_context_wakeup (priv->main_context);
+        }
+      else if (priv->read_op == NULL)
+        {
+          read_waiter_queue (priv, FPC_DISUM_TRANSPORT_ERROR_CANCELLED, NULL, 0);
+        }
+    }
 }
 
 static FpcDisumTransportStatus
@@ -1570,6 +2063,17 @@ fpc_disum_usb_identity (FpcDisumTransport *transport, FpcDisumTransportIdentity 
 static void
 priv_finalize (FpcDisumUsbPrivate *priv)
 {
+  FpcDisumUsbChunk *chunk;
+
+  /* No read URB, control operation or waiter may survive the last reference:
+   * every one of them holds a private reference until it is freed. */
+  g_assert (priv->read_op == NULL);
+  g_assert (priv->read_waiter == NULL);
+  g_assert (priv->control_op == NULL);
+
+  while ((chunk = g_queue_pop_head (&priv->read_queue)) != NULL)
+    read_chunk_free (chunk);
+
   if (priv->source != NULL)
     {
       if (priv->context != NULL && priv->notifiers_installed)
@@ -1716,6 +2220,7 @@ fpc_disum_usb_transport_new (FpDevice *device, FpcDisumDiagnostics *diagnostics,
   priv->identity = identity;
   priv->generation = 0;
   g_queue_init (&priv->completions);
+  g_queue_init (&priv->read_queue);
 
   bound_from_raw (priv, raw_device);
 
@@ -1734,6 +2239,10 @@ fpc_disum_usb_transport_new (FpDevice *device, FpcDisumDiagnostics *diagnostics,
   self->parent.identity = fpc_disum_usb_identity;
   self->parent.cancel = fpc_disum_usb_cancel;
   self->priv = priv;
+
+  /* The read URB must already be outstanding before the session sends
+   * CMD_INIT: the initialisation result is emitted in the reset window. */
+  read_start (priv, &self->parent);
 
   return &self->parent;
 }
@@ -1755,10 +2264,11 @@ fpc_disum_usb_transport_free (FpcDisumTransport *transport)
    * until libusb reports its completion; only then are the handle, the raw
    * device, the source and the context released. */
   priv->torn_down = TRUE;
+  priv->read_enabled = FALSE;
 
-  if (priv->in_flight != NULL)
+  if (priv->control_op != NULL)
     {
-      FpcDisumUsbOp *op = priv->in_flight;
+      FpcDisumUsbOp *op = priv->control_op;
 
       if (op->retry_source != NULL)
         {
@@ -1779,10 +2289,42 @@ fpc_disum_usb_transport_free (FpcDisumTransport *transport)
           if (op->kind == FPC_DISUM_USB_OP_REOPEN)
             close_probe_raw (op);
           g_queue_remove (&priv->completions, op);
-          priv->in_flight = NULL;
+          priv->control_op = NULL;
           op_free (op);
         }
     }
+
+  /* The continuous read is cancelled and reaped before the handle can be
+   * closed; until its completion runs it keeps the private state alive. */
+  if (priv->read_op != NULL)
+    {
+      FpcDisumUsbOp *op = priv->read_op;
+
+      if (op->transfer != NULL && op->submitted && !op->completed)
+        {
+          op->cancel_requested = TRUE;
+          libusb_cancel_transfer (op->transfer);
+          g_main_context_wakeup (priv->main_context);
+        }
+      else
+        {
+          g_queue_remove (&priv->completions, op);
+          priv->read_op = NULL;
+          op_free (op);
+        }
+    }
+
+  /* A waiting session read is failed without a callback: nothing may be
+   * delivered after free. */
+  if (priv->read_waiter != NULL)
+    {
+      op_free (priv->read_waiter);
+      priv->read_waiter = NULL;
+    }
+
+  while (!g_queue_is_empty (&priv->read_queue))
+    read_chunk_free (g_queue_pop_head (&priv->read_queue));
+  priv->read_queue_bytes = 0;
 
   g_free (self);
   priv_unref (priv);

@@ -435,9 +435,52 @@ fake_complete_control (struct libusb_transfer *transfer, enum libusb_transfer_st
 }
 
 static struct libusb_transfer *
-fake_pending_head (void)
+fake_pending_of_type (guint8 type)
 {
-  return g_queue_peek_head (fake.pending);
+  GList *item;
+
+  for (item = fake.pending->head; item != NULL; item = item->next)
+    {
+      struct libusb_transfer *transfer = item->data;
+
+      if (transfer->type == type)
+        return transfer;
+    }
+
+  return NULL;
+}
+
+/* The backend keeps exactly one read URB outstanding on EP 0x82. */
+static struct libusb_transfer *
+fake_pending_read (void)
+{
+  struct libusb_transfer *transfer = fake_pending_of_type (LIBUSB_TRANSFER_TYPE_BULK);
+
+  g_assert_true (transfer == NULL || transfer->endpoint == 0x82);
+
+  return transfer;
+}
+
+static struct libusb_transfer *
+fake_pending_control (void)
+{
+  return fake_pending_of_type (LIBUSB_TRANSFER_TYPE_CONTROL);
+}
+
+/* After the transport is freed every remaining transfer was cancelled; deliver
+ * that completion so the fake resource counters settle exactly once. */
+static void pump_main_context (void);
+
+static void
+fake_reap_pending (void)
+{
+  while (fake.pending != NULL && !g_queue_is_empty (fake.pending))
+    {
+      struct libusb_transfer *transfer = g_queue_peek_head (fake.pending);
+
+      fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+      pump_main_context ();
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -470,7 +513,16 @@ pump_until_pending (guint timeout_ms)
 {
   gint64 deadline = g_get_monotonic_time () + (gint64)timeout_ms * 1000;
 
-  while (fake_pending_head () == NULL && g_get_monotonic_time () < deadline)
+  while (fake_pending_control () == NULL && g_get_monotonic_time () < deadline)
+    g_main_context_iteration (NULL, TRUE);
+}
+
+static void
+pump_until_cancelled (guint timeout_ms)
+{
+  gint64 deadline = g_get_monotonic_time () + (gint64)timeout_ms * 1000;
+
+  while (fake.cancel_calls == 0 && g_get_monotonic_time () < deadline)
     g_main_context_iteration (NULL, TRUE);
 }
 
@@ -571,6 +623,7 @@ fixture_free (Fixture *fixture)
       fpc_disum_usb_transport_free (fixture->transport);
       fixture->transport = NULL;
       pump_main_context ();
+      fake_reap_pending ();
     }
 
   fpc_disum_diagnostics_unref (fixture->diagnostics);
@@ -640,6 +693,24 @@ capture_done (FpcDisumTransport *transport, FpcDisumTransportStatus status, gsiz
   capture->calls++;
   capture->status = status;
   capture->actual_length = actual_length;
+}
+
+typedef struct
+{
+  DoneCapture done;
+  gboolean read_pending_at_done;
+} ReopenCapture;
+
+static void
+capture_reopen_done (FpcDisumTransport *transport, FpcDisumTransportStatus status,
+    gsize actual_length, gpointer user_data)
+{
+  ReopenCapture *capture = user_data;
+
+  capture_done (transport, status, actual_length, &capture->done);
+  /* The continuous reader must already be outstanding when the reopen
+   * completes, so no initialisation frame can fall between the two. */
+  capture->read_pending_at_done = fake_pending_read () != NULL;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -779,7 +850,7 @@ test_partial_timeout_then_ok (void)
   static const guint8 part2[] = { 0x0c, 0x00, 0x00, 0x00, 0x00 };
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &first);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   memcpy (transfer->buffer, part1, sizeof part1);
   fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, (int)sizeof part1);
@@ -791,7 +862,7 @@ test_partial_timeout_then_ok (void)
   g_assert_cmpint (memcmp (first.data, part1, sizeof part1), ==, 0);
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &second);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   memcpy (transfer->buffer, part2, sizeof part2);
   fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, (int)sizeof part2);
@@ -814,7 +885,7 @@ test_zlp_is_ok (void)
   struct libusb_transfer *transfer;
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 0);
   pump_main_context ();
@@ -835,7 +906,7 @@ test_cancel_completes_from_real_callback (void)
   struct libusb_transfer *transfer;
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
 
   fixture->transport->cancel (fixture->transport);
@@ -874,7 +945,7 @@ test_submit_failure_completes_once (void)
   g_assert_cmpuint (capture.calls, ==, 1);
   g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_ERROR_NO_DEVICE);
   g_assert_cmpuint (capture.actual_length, ==, 0);
-  g_assert_cmpint (fake.submit_calls, ==, 1);
+  g_assert_cmpint (fake.submit_calls, ==, 2); /* the factory read URB + the failed control */
   g_assert_cmpint (fake.free_calls, ==, 1);
 
   fixture_free (fixture);
@@ -891,7 +962,7 @@ test_short_control_out_reports_actual (void)
 
   fixture->transport->control_out (
       fixture->transport, 0x0b, 0x0000, command, sizeof command, capture_done, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_control ();
   g_assert_nonnull (transfer);
   g_assert_cmpuint (transfer->length, ==, LIBUSB_CONTROL_SETUP_SIZE + 4);
 
@@ -921,7 +992,7 @@ test_pollfd_add_remove (void)
   fake.added_cb (fake.pipefd[0], POLLIN, fake.notifier_data);
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 3);
   pump_main_context ();
@@ -935,7 +1006,7 @@ test_pollfd_add_remove (void)
 
   capture.calls = 0;
   fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 0);
   pump_main_context ();
@@ -955,7 +1026,7 @@ test_free_waits_for_delayed_completion (void)
   struct libusb_transfer *transfer;
 
   fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
 
   fpc_disum_usb_transport_free (fixture->transport);
@@ -993,16 +1064,27 @@ static void
 test_reopen_keeps_live_handle (void)
 {
   Fixture *fixture = fixture_new ();
-  DoneCapture capture = { 0 };
+  ReopenCapture capture = { 0 };
   struct libusb_transfer *transfer;
   FpcDisumTransportIdentity identity;
   static const guint8 descriptor[18]
       = { 18, 1, 0x00, 0x02, 0, 0, 0, 64, 0xA5, 0x10, 0x01, 0x92, 0x00, 0x00, 1, 2, 3, 1 };
 
-  fixture->transport->reopen (
-      fixture->transport, g_get_monotonic_time () + 2 * G_USEC_PER_SEC, capture_done, &capture);
+  fixture->transport->reopen (fixture->transport, g_get_monotonic_time () + 2 * G_USEC_PER_SEC,
+      capture_reopen_done, &capture);
 
-  transfer = fake_pending_head ();
+  /* The reader is not pre-cancelled: it stays outstanding for the reap window
+   * so the reset window keeps being drained. */
+  g_assert_null (fake_pending_control ());
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  g_assert_cmpint (fake.cancel_calls, ==, 0);
+
+  /* A terminal completion ends the reap without a host cancellation. */
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+  pump_main_context ();
+
+  transfer = fake_pending_control ();
   g_assert_nonnull (transfer);
   g_assert_cmpint (transfer->type, ==, LIBUSB_TRANSFER_TYPE_CONTROL);
 
@@ -1020,8 +1102,9 @@ test_reopen_keeps_live_handle (void)
   }
   pump_main_context ();
 
-  g_assert_cmpuint (capture.calls, ==, 1);
-  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_cmpuint (capture.done.calls, ==, 1);
+  g_assert_cmpint (capture.done.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_true (capture.read_pending_at_done);
   g_assert_cmpint (fake.close_calls, ==, 0);
   g_assert_cmpint (fake.open_calls, ==, 1);
 
@@ -1036,23 +1119,30 @@ static void
 test_reopen_waits_for_new_handle (void)
 {
   Fixture *fixture = fixture_new ();
-  DoneCapture capture = { 0 };
+  ReopenCapture capture = { 0 };
   struct libusb_transfer *transfer;
   FpcDisumTransportIdentity identity;
   guint8 payload[18] = { 0 };
   static const guint8 bad[18]
       = { 18, 1, 0x00, 0x02, 0, 0, 0, 64, 0x11, 0x22, 0x33, 0x44, 0, 0, 1, 2, 3, 1 };
 
-  fixture->transport->reopen (
-      fixture->transport, g_get_monotonic_time () + 3 * G_USEC_PER_SEC, capture_done, &capture);
+  fixture->transport->reopen (fixture->transport, g_get_monotonic_time () + 3 * G_USEC_PER_SEC,
+      capture_reopen_done, &capture);
 
-  transfer = fake_pending_head ();
+  /* Reap the old read URB first, without a host cancellation. */
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  g_assert_cmpint (fake.cancel_calls, ==, 0);
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+  pump_main_context ();
+
+  transfer = fake_pending_control ();
   g_assert_nonnull (transfer);
 
   /* The old handle is dead: the probe fails with no device. */
   fake_complete (transfer, LIBUSB_TRANSFER_NO_DEVICE, 0);
   pump_main_context ();
-  g_assert_cmpuint (capture.calls, ==, 0);
+  g_assert_cmpuint (capture.done.calls, ==, 0);
   g_assert_cmpint (fake.close_calls, ==, 1);
 
   /* The fresh list is taken 200 ms later; the candidate is opened, claimed and
@@ -1067,7 +1157,7 @@ test_reopen_waits_for_new_handle (void)
   payload[13] = (guint8)(fake_device.descriptor.bcdDevice >> 8);
 
   pump_until_pending (2000);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_control ();
   g_assert_nonnull (transfer);
   g_assert_cmpint (transfer->type, ==, LIBUSB_TRANSFER_TYPE_CONTROL);
   g_assert_cmpint (fake.open_calls, ==, 2);
@@ -1076,12 +1166,527 @@ test_reopen_waits_for_new_handle (void)
   fake_complete_control (transfer, LIBUSB_TRANSFER_COMPLETED, payload, sizeof payload);
   pump_main_context ();
 
-  g_assert_cmpuint (capture.calls, ==, 1);
-  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_cmpuint (capture.done.calls, ==, 1);
+  g_assert_cmpint (capture.done.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_true (capture.read_pending_at_done);
 
   fixture->transport->identity (fixture->transport, &identity);
   g_assert_cmpuint (identity.handle_id, ==, 2);
   g_assert_cmpuint (identity.address, ==, 9);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_read_submit_failure_is_terminal (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+
+  /* The reader re-arms after a short completion, but the next submit fails:
+   * that must surface as a real error, never as an empty success. */
+  fake.submit_error = LIBUSB_ERROR_NO_DEVICE;
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 0);
+  pump_main_context ();
+
+  g_assert_null (fake_pending_read ());
+
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_ERROR_NO_DEVICE);
+  g_assert_cmpuint (capture.length, ==, 0);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_cancel_during_reopen_reap (void)
+{
+  Fixture *fixture = fixture_new ();
+  DoneCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+
+  fixture->transport->reopen (
+      fixture->transport, g_get_monotonic_time () + 2 * G_USEC_PER_SEC, capture_done, &capture);
+
+  /* The reopen is waiting for the old read URB; it was not pre-cancelled. */
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  g_assert_cmpint (fake.cancel_calls, ==, 0);
+
+  fixture->transport->cancel (fixture->transport);
+  g_assert_cmpint (fake.cancel_calls, ==, 1);
+  g_assert_cmpuint (capture.calls, ==, 0);
+
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+  pump_main_context ();
+
+  /* A cancelled reopen completes exactly once and never starts a probe. */
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+  g_assert_null (fake_pending_control ());
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_read_starts_before_session (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+
+  /* The backend owns the read URB from the factory moment; no session read or
+   * control was issued, and nothing was delivered anywhere. */
+  g_assert_nonnull (fake_pending_read ());
+  g_assert_null (fake_pending_control ());
+  g_assert_cmpuint (capture.calls, ==, 0);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_queued_frame_survives_reopen (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+  ReopenCapture reopen = { 0 };
+  struct libusb_transfer *transfer;
+  static const guint8 init_result[12]
+      = { 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00 };
+  guint8 payload[18] = { 0 };
+
+  /* A frame arrives before the session's first bulk_read and before CMD_INIT.
+   * The backend must keep it. */
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  memcpy (transfer->buffer, init_result, sizeof init_result);
+  fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, (int)sizeof init_result);
+  pump_main_context ();
+
+  /* The reader immediately re-armed itself. */
+  g_assert_nonnull (fake_pending_read ());
+
+  /* The device resets: the outstanding read dies.  That alone must not fail
+   * anything; the reader pauses and keeps the queued frame. */
+  fake_complete (fake_pending_read (), LIBUSB_TRANSFER_NO_DEVICE, 0);
+  pump_main_context ();
+  g_assert_null (fake_pending_read ());
+
+  fixture->transport->reopen (fixture->transport, g_get_monotonic_time () + 3 * G_USEC_PER_SEC,
+      capture_reopen_done, &reopen);
+
+  /* The read was already reaped, so the old-handle probe goes out at once. */
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_NO_DEVICE, 0);
+  pump_main_context ();
+
+  fake_device.address = 9;
+  payload[0] = 18;
+  payload[1] = 1;
+  payload[2] = 0x00;
+  payload[3] = 0x02;
+  payload[7] = 64;
+  payload[8] = (guint8)(fake_device.descriptor.idVendor & 0xff);
+  payload[9] = (guint8)(fake_device.descriptor.idVendor >> 8);
+  payload[10] = (guint8)(fake_device.descriptor.idProduct & 0xff);
+  payload[11] = (guint8)(fake_device.descriptor.idProduct >> 8);
+  payload[12] = (guint8)(fake_device.descriptor.bcdDevice & 0xff);
+  payload[13] = (guint8)(fake_device.descriptor.bcdDevice >> 8);
+  payload[14] = 1;
+  payload[15] = 2;
+  payload[16] = 3;
+  payload[17] = 1;
+
+  pump_until_pending (2000);
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete_control (transfer, LIBUSB_TRANSFER_COMPLETED, payload, sizeof payload);
+  pump_main_context ();
+
+  g_assert_cmpuint (reopen.done.calls, ==, 1);
+  g_assert_cmpint (reopen.done.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_true (reopen.read_pending_at_done);
+
+  /* The first post-reopen session read receives the pre-reset frame. */
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_cmpuint (capture.length, ==, sizeof init_result);
+  g_assert_cmpint (memcmp (capture.data, init_result, sizeof init_result), ==, 0);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+/*
+ * The reopen must not pre-cancel the old read.  The URB stays outstanding
+ * across the reset, the 38 B initialisation frame is queued, and the natural
+ * NO_DEVICE completion then releases the handle.
+ */
+static void
+test_reopen_waits_for_natural_reset (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+  ReopenCapture reopen = { 0 };
+  struct libusb_transfer *transfer;
+  guint8 init_result[38] = { 0 };
+  guint8 payload[18] = { 0 };
+
+  init_result[3] = 0x02; /* EVT_INIT_RESULT */
+  init_result[7] = 38;
+  memset (init_result + 8, 0x5A, sizeof init_result - 8);
+
+  fixture->transport->reopen (fixture->transport, g_get_monotonic_time () + 5 * G_USEC_PER_SEC,
+      capture_reopen_done, &reopen);
+
+  /* Nothing was cancelled and the old read is still the outstanding URB. */
+  g_assert_cmpint (fake.cancel_calls, ==, 0);
+  g_assert_null (fake_pending_control ());
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+
+  /* The initialisation frame arrives while the device is resetting.  It must
+   * be kept even though the session read is disabled during reopen. */
+  memcpy (transfer->buffer, init_result, sizeof init_result);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, (int)sizeof init_result);
+  pump_main_context ();
+
+  /* The reap keeps draining the old handle: no swap and no cancellation. */
+  g_assert_cmpint (fake.cancel_calls, ==, 0);
+  g_assert_null (fake_pending_control ());
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+
+  /* The reset now ends the old read naturally. */
+  fake_complete (transfer, LIBUSB_TRANSFER_NO_DEVICE, 0);
+  pump_main_context ();
+
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_NO_DEVICE, 0);
+  pump_main_context ();
+
+  fake_device.address = 9;
+  payload[0] = 18;
+  payload[1] = 1;
+  payload[2] = 0x00;
+  payload[3] = 0x02;
+  payload[7] = 64;
+  payload[8] = (guint8)(fake_device.descriptor.idVendor & 0xff);
+  payload[9] = (guint8)(fake_device.descriptor.idVendor >> 8);
+  payload[10] = (guint8)(fake_device.descriptor.idProduct & 0xff);
+  payload[11] = (guint8)(fake_device.descriptor.idProduct >> 8);
+  payload[12] = (guint8)(fake_device.descriptor.bcdDevice & 0xff);
+  payload[13] = (guint8)(fake_device.descriptor.bcdDevice >> 8);
+  payload[14] = 1;
+  payload[15] = 2;
+  payload[16] = 3;
+  payload[17] = 1;
+
+  pump_until_pending (2000);
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete_control (transfer, LIBUSB_TRANSFER_COMPLETED, payload, sizeof payload);
+  pump_main_context ();
+
+  g_assert_cmpuint (reopen.done.calls, ==, 1);
+  g_assert_cmpint (reopen.done.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_true (reopen.read_pending_at_done);
+
+  /* The first post-reopen read delivers the pre-reset frame and its status. */
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_TIMEOUT);
+  g_assert_cmpuint (capture.length, ==, sizeof init_result);
+  g_assert_cmpint (memcmp (capture.data, init_result, sizeof init_result), ==, 0);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+/*
+ * If the old read only ever times out, the bounded reap grace still converges:
+ * the transport cancels and reaps that URB, then performs the reopen.
+ */
+static void
+test_reopen_grace_expires_without_terminal (void)
+{
+  Fixture *fixture = fixture_new ();
+  DoneCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+  guint8 payload[18] = { 0 };
+  guint i;
+
+  fixture->transport->reopen (
+      fixture->transport, g_get_monotonic_time () + 5 * G_USEC_PER_SEC, capture_done, &capture);
+
+  /* Timeout cycles are not reaps: the old URB is re-armed each time. */
+  for (i = 0; i < 2; i++)
+    {
+      transfer = fake_pending_read ();
+      g_assert_nonnull (transfer);
+      fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 0);
+      pump_main_context ();
+
+      g_assert_cmpint (fake.cancel_calls, ==, 0);
+      g_assert_null (fake_pending_control ());
+      g_assert_nonnull (fake_pending_read ());
+    }
+
+  /* At the grace bound the transport cancels the old URB and waits for its
+   * real completion before swapping the handle. */
+  pump_until_cancelled (FPC_DISUM_USB_READ_REAP_GRACE_MS + 2000);
+  g_assert_cmpint (fake.cancel_calls, ==, 1);
+  g_assert_null (fake_pending_control ());
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+  pump_main_context ();
+
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_NO_DEVICE, 0);
+  pump_main_context ();
+
+  fake_device.address = 9;
+  payload[0] = 18;
+  payload[1] = 1;
+  payload[2] = 0x00;
+  payload[3] = 0x02;
+  payload[7] = 64;
+  payload[8] = (guint8)(fake_device.descriptor.idVendor & 0xff);
+  payload[9] = (guint8)(fake_device.descriptor.idVendor >> 8);
+  payload[10] = (guint8)(fake_device.descriptor.idProduct & 0xff);
+  payload[11] = (guint8)(fake_device.descriptor.idProduct >> 8);
+  payload[12] = (guint8)(fake_device.descriptor.bcdDevice & 0xff);
+  payload[13] = (guint8)(fake_device.descriptor.bcdDevice >> 8);
+  payload[14] = 1;
+  payload[15] = 2;
+  payload[16] = 3;
+  payload[17] = 1;
+
+  pump_until_pending (2000);
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete_control (transfer, LIBUSB_TRANSFER_COMPLETED, payload, sizeof payload);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_nonnull (fake_pending_read ());
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_timeout_loop_keeps_queued_data (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+  static const guint8 partial[5] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  memcpy (transfer->buffer, partial, sizeof partial);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, (int)sizeof partial);
+  pump_main_context ();
+
+  /* Two empty timeout cycles must not discard the queued partial data. */
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 0);
+  pump_main_context ();
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 0);
+  pump_main_context ();
+
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_TIMEOUT);
+  g_assert_cmpuint (capture.length, ==, sizeof partial);
+  g_assert_cmpint (memcmp (capture.data, partial, sizeof partial), ==, 0);
+
+  /* The queue is empty now: a session read waits for the next outcome. */
+  capture.calls = 0;
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+  g_assert_cmpuint (capture.calls, ==, 0);
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 0);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_TIMEOUT);
+  g_assert_cmpuint (capture.length, ==, 0);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_control_concurrent_with_read (void)
+{
+  Fixture *fixture = fixture_new ();
+  DoneCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+  static const guint8 command[4] = { 0x01, 0x02, 0x03, 0x04 };
+
+  /* The read URB from the factory is outstanding. */
+  g_assert_nonnull (fake_pending_read ());
+  g_assert_cmpint (fake.submit_calls, ==, 1);
+
+  fixture->transport->control_out (
+      fixture->transport, 0x0b, 0x0000, command, sizeof command, capture_done, &capture);
+
+  /* Both transfers are in the kernel at the same time: the read does not own
+   * the control slot. */
+  g_assert_nonnull (fake_pending_control ());
+  g_assert_nonnull (fake_pending_read ());
+  g_assert_cmpint (fake.submit_calls, ==, 2);
+
+  fake_complete (fake_pending_control (), LIBUSB_TRANSFER_COMPLETED, 2);
+  pump_main_context ();
+
+  g_assert_cmpuint (capture.calls, ==, 1);
+  g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+  g_assert_cmpuint (capture.actual_length, ==, 2);
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 3);
+  pump_main_context ();
+
+  /* The continuous reader re-armed after the completion. */
+  g_assert_nonnull (fake_pending_read ());
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_cancel_control_and_waiting_read (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture data = { 0 };
+  DoneCapture control = { 0 };
+  struct libusb_transfer *transfer;
+  static const guint8 command[4] = { 0x0b, 0x00, 0x00, 0x00 };
+
+  fixture->transport->bulk_read (fixture->transport, capture_data, &data);
+  fixture->transport->control_out (
+      fixture->transport, 0x0b, 0x0000, command, sizeof command, capture_done, &control);
+  g_assert_nonnull (fake_pending_read ());
+  g_assert_nonnull (fake_pending_control ());
+
+  fixture->transport->cancel (fixture->transport);
+
+  /* The control and the read URB were both cancelled; cancel() itself still
+   * delivers nothing. */
+  g_assert_cmpint (fake.cancel_calls, ==, 2);
+  pump_main_context ();
+  g_assert_cmpuint (data.calls, ==, 0);
+  g_assert_cmpuint (control.calls, ==, 0);
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  memset (transfer->buffer, 0xCD, 4);
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 4);
+
+  transfer = fake_pending_control ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_CANCELLED, 0);
+  pump_main_context ();
+
+  /* Exactly one completion per operation, with the read tail preserved. */
+  g_assert_cmpuint (data.calls, ==, 1);
+  g_assert_cmpint (data.status, ==, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+  g_assert_cmpuint (data.length, ==, 4);
+  g_assert_cmpint (data.data[0], ==, 0xCD);
+
+  g_assert_cmpuint (control.calls, ==, 1);
+  g_assert_cmpint (control.status, ==, FPC_DISUM_TRANSPORT_ERROR_CANCELLED);
+
+  pump_main_context ();
+  g_assert_cmpuint (data.calls, ==, 1);
+  g_assert_cmpuint (control.calls, ==, 1);
+
+  fixture_free (fixture);
+  assert_fake_quiescent ();
+}
+
+static void
+test_read_queue_is_bounded (void)
+{
+  Fixture *fixture = fixture_new ();
+  DataCapture capture = { 0 };
+  struct libusb_transfer *transfer;
+  const guint chunk = FPC_DISUM_USB_READ_QUEUE_MAX_BYTES / FPC_DISUM_USB_READ_QUEUE_MAX_CHUNKS;
+  guint i;
+
+  g_assert_cmpuint (chunk, ==, FPC_DISUM_USB_BULK_READ_SIZE);
+
+  /* Produce more chunks than the queue can hold, with no session read. */
+  for (i = 0; i < FPC_DISUM_USB_READ_QUEUE_MAX_CHUNKS + 8; i++)
+    {
+      transfer = fake_pending_read ();
+      g_assert_nonnull (transfer);
+      memset (transfer->buffer, (int)(i + 1), chunk);
+      fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, (int)chunk);
+      pump_main_context ();
+      g_assert_nonnull (fake_pending_read ());
+    }
+
+  /* Only the bound is kept, oldest first; the excess was dropped, so exactly
+   * the bounded number of chunks can be drained. */
+  for (i = 0; i < FPC_DISUM_USB_READ_QUEUE_MAX_CHUNKS; i++)
+    {
+      capture.calls = 0;
+      fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+      pump_main_context ();
+
+      g_assert_cmpuint (capture.calls, ==, 1);
+      g_assert_cmpint (capture.status, ==, FPC_DISUM_TRANSPORT_OK);
+      g_assert_cmpuint (capture.length, ==, chunk);
+      g_assert_cmpint (capture.data[0], ==, (gint)(i + 1));
+    }
+
+  /* The queue is empty: the next read waits instead of returning a dropped
+   * chunk. */
+  capture.calls = 0;
+  fixture->transport->bulk_read (fixture->transport, capture_data, &capture);
+  pump_main_context ();
+  g_assert_cmpuint (capture.calls, ==, 0);
+
+  transfer = fake_pending_read ();
+  g_assert_nonnull (transfer);
+  fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 0);
+  pump_main_context ();
+  g_assert_cmpuint (capture.calls, ==, 1);
 
   fixture_free (fixture);
   assert_fake_quiescent ();
@@ -1347,7 +1952,10 @@ verify_smoke_events (const gchar *path)
         }
     }
 
-  ok = submits == 2 && completes == 2 && g_strcmp0 (statuses[0], "timeout") == 0 && actual[0] == 7
+  /* The continuous reader re-arms after every completion, so the log may end
+   * with one more submit whose URB teardown cancels.  Exactly the two observed
+   * read outcomes must still be complete and distinct. */
+  ok = submits >= 2 && completes == 2 && g_strcmp0 (statuses[0], "timeout") == 0 && actual[0] == 7
        && g_strcmp0 (statuses[1], "ok") == 0 && actual[1] == 5 && op_ids[0] != 0 && op_ids[1] != 0
        && op_ids[0] != op_ids[1];
 
@@ -1449,14 +2057,14 @@ run_smoke (const gchar *directory)
   read.parser = &parser;
 
   fixture.transport->bulk_read (fixture.transport, smoke_on_data, &read);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   memcpy (transfer->buffer, event_bytes, 7);
   fake_complete (transfer, LIBUSB_TRANSFER_TIMED_OUT, 7);
   pump_main_context ();
 
   fixture.transport->bulk_read (fixture.transport, smoke_on_data, &read);
-  transfer = fake_pending_head ();
+  transfer = fake_pending_read ();
   g_assert_nonnull (transfer);
   memcpy (transfer->buffer, event_bytes + 7, 5);
   fake_complete (transfer, LIBUSB_TRANSFER_COMPLETED, 5);
@@ -1490,6 +2098,7 @@ out:
       fpc_disum_usb_transport_free (fixture.transport);
       fixture.transport = NULL;
       pump_main_context ();
+      fake_reap_pending ();
     }
 
   fpc_disum_parser_clear (&parser);
@@ -1557,6 +2166,17 @@ main (int argc, char **argv)
       "/usb/free-waits-for-delayed-completion", test_free_waits_for_delayed_completion);
   g_test_add_func ("/usb/reopen-keeps-live-handle", test_reopen_keeps_live_handle);
   g_test_add_func ("/usb/reopen-waits-for-new-handle", test_reopen_waits_for_new_handle);
+  g_test_add_func ("/usb/cancel-during-reopen-reap", test_cancel_during_reopen_reap);
+  g_test_add_func ("/usb/read-submit-failure-is-terminal", test_read_submit_failure_is_terminal);
+  g_test_add_func ("/usb/read-starts-before-session", test_read_starts_before_session);
+  g_test_add_func ("/usb/queued-frame-survives-reopen", test_queued_frame_survives_reopen);
+  g_test_add_func ("/usb/reopen-waits-for-natural-reset", test_reopen_waits_for_natural_reset);
+  g_test_add_func (
+      "/usb/reopen-grace-expires-without-terminal", test_reopen_grace_expires_without_terminal);
+  g_test_add_func ("/usb/timeout-loop-keeps-queued-data", test_timeout_loop_keeps_queued_data);
+  g_test_add_func ("/usb/control-concurrent-with-read", test_control_concurrent_with_read);
+  g_test_add_func ("/usb/cancel-control-and-waiting-read", test_cancel_control_and_waiting_read);
+  g_test_add_func ("/usb/read-queue-is-bounded", test_read_queue_is_bounded);
 
   return g_test_run ();
 }

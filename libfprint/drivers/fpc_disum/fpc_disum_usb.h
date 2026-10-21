@@ -19,6 +19,26 @@
 
 G_BEGIN_DECLS
 
+/* SPEC §1/§3.2: the only data endpoint carries at most maxPacketSize = 64 B. */
+#define FPC_DISUM_USB_BULK_READ_SIZE 64
+
+/*
+ * Completed reads are buffered while no session read is waiting, so frames
+ * that arrive before CMD_INIT (and across the reset window) are not lost.  The
+ * bound is explicit: when it is reached the newest frame is dropped and
+ * counted; the oldest data (the initialisation window) is kept.
+ */
+#define FPC_DISUM_USB_READ_QUEUE_MAX_CHUNKS 64
+#define FPC_DISUM_USB_READ_QUEUE_MAX_BYTES                                                         \
+  (FPC_DISUM_USB_READ_QUEUE_MAX_CHUNKS * FPC_DISUM_USB_BULK_READ_SIZE)
+
+/*
+ * A reopen keeps the old read URB outstanding while waiting for the reset to
+ * terminate it naturally.  This bounds that wait; it is additionally capped by
+ * the reopen deadline, so a read that only ever times out cannot stall reopen.
+ */
+#define FPC_DISUM_USB_READ_REAP_GRACE_MS 2500
+
 /*
  * Create the libusb implementation of the transport boundary for @device.
  * @device must be a USB #FpDevice.  The transport borrows it for its whole
