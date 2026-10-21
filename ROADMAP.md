@@ -440,13 +440,81 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 - **剩余最可信差异（待规格侧确认）**：本机所有尝试都是**几十秒内连续会话**（每次 `CMD_INIT` 都复位设备），而 §16.4 记载"reset 后约 7 分钟内 `EVT_FINGER_DWN` 不可信"；规格侧成功采集很可能是**间隔较久**的单次运行。
 - 本侧下一步（**不改契约、不猜设备**）：设备**空闲 ≥10 分钟**后跑一次单次采集；若成功则补齐 `cancel-reopen`／`reopen` 并更新 M6 条目。
 
-## M7：AUR 打包与分发（方案：libfprint fork 的 drop-in 替换包）
+## M7：fprintd 端到端功能补全（未完成）
+
+M6 只证明“采集”链路。fprintd 登录/验证需要 enroll（默认 5 段采集）、verify/identify（NBIS 匹配）与完整 daemon 生命周期；这些尚未实现验收。
+
+### M7.0 能力审计与测试矩阵
+
+- [ ] 确认 `FpImageDevice` 基类实际提供的 features：`CAPTURE`、`IDENTIFY`、`VERIFY`、`UPDATE_PRINT`；确认本驱动没有设备存储（`STORAGE`），print 由 fprintd 主机侧保存。
+- [ ] 确认 `nr_enroll_stages=5`、`bz3_threshold` 默认 40、print 类型 `FPI_PRINT_NBIS` 的实际行为。
+- [ ] 建立能力矩阵：单次 capture、同会话多次 capture、enroll、verify、identify、list/delete、cancel、suspend/resume；每项标注“代码存在 / 离线测试 / 真机通过 / 未验证”。
+- [ ] 明确不支持项：设备内模板、MOC、录入模式 `wValue=2`、其他固件。
+
+**完成判据**：矩阵中不存在“能力未知”项；未验证项不得出现在支持声明中。
+
+### M7.1 同一 open 会话内多次采集
+
+fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次采集和 close/reopen。
+
+- [ ] 审计并修正 `fpc_disum_session_capture_async()`：首次 capture 后 session 仍可再次进入 `CAPTURE_ARM`，TLS 通道复用，不重新执行 §6/§8。
+- [ ] 保证每轮独立：touch 窗口、ARM、GET_IMG、图像回调、finger status；`ARM_STOP` 只在 close/cleanup 执行一次。
+- [ ] 定义轮间失败语义：某轮 no-touch/取消/协议失败时，是终止整个 enroll 还是允许下一轮；不得吞错或复用旧图。
+- [ ] `test-fpc-disum-session` 增加 5 次连续 capture 的离线用例，以及第 2/3 轮取消、失败后 close 的用例。
+- [ ] 真机增加 `multi-capture N` 探针模式（同一 open，N 次按压/出图），验证 5 张图结构均合法、无会话重建。
+
+**完成判据**：一次 open 内 5/5 张合法图像，TLS/CMD_INIT 只发生一次，cleanup 只发生一次；离线与真机均有证据。
+
+### M7.2 enroll / verify / identify
+
+- [ ] `fprintd-enroll`：一次 enroll 完成默认 5 段采集，生成 `FPI_PRINT_NBIS` print；失败轮可重试，取消可恢复。
+- [ ] `fprintd-verify`：同一手指成功、不同手指失败；连续 3 次 enroll→verify 可重复。
+- [ ] `fprintd-identify`：至少两个已录入 print 中选择正确者；不匹配时失败而非误报。
+- [ ] 评估 112×88 图像的 NBIS 细节点数量与 `bz3_threshold=40`；若匹配率不足，只允许主机侧图像/阈值调优，不猜测设备协议。
+- [ ] `fprintd-list` / `fprintd-delete`：主机侧存储的 print 可列出、删除、重录。
+- [ ] 记录 FRR/FAR 的粗略样本（不是安全认证结论），至少覆盖成功/失败/重试。
+
+**完成判据**：enroll/verify/identify 在目标设备上可重复通过；失败路径不产生假成功；阈值与图像质量有记录。
+
+### M7.3 fprintd daemon 生命周期与系统集成
+
+- [ ] `fprintd` 启动、停止、重启后设备可再次枚举和 open。
+- [ ] D-Bus 取消：capture/verify 中途取消，daemon 不挂起，下一动作可用。
+- [ ] suspend/resume、锁屏/解锁后设备可用；必要时补驱动/核心 suspend 处理。
+- [ ] 多用户：不同用户各自 print 存储隔离，设备释放正常。
+- [ ] 设备占用：enroll/verify 并发请求返回明确错误，不重复 open 同一传感器。
+- [ ] 在一次性测试用户上验证 PAM 登录/解锁；不修改系统默认 PAM 配置。
+- [ ] 异常：daemon 在 capture 中被杀、设备拔出、非预期 reset；不泄漏句柄/密钥，不假成功。
+
+**完成判据**：上述生命周期逐项有可复现步骤与结果；PAM 只在隔离环境验证。
+
+### M7.4 失败、取消与安全边界
+
+- [ ] no-touch 超时、用户取消、daemon 取消、设备移除分别返回可区分错误。
+- [ ] 失败后 print 不写入/不更新；部分帧不拼成成功图像。
+- [ ] ARM_STOP/ABORT/SESSION_OFF 在每轮 cleanup 只执行一次；错误不覆盖首因。
+- [ ] 真机日志不保存图像、PSK、envelope、TLS 载荷；证据目录 0700/0600。
+- [ ] 复核 `0x64` 只按规格失败，不重试掩盖。
+
+**完成判据**：故障注入下无假成功、无泄漏、无悬空回调；支持声明只写已验证能力。
+
+### M7.5 支持范围更新
+
+- [ ] 将 M7 结果写回 `docs/m6/SUPPORT_DECLARATION.md`（或新建 fprintd 支持声明），区分“libfprint 采集”与“fprintd enroll/verify”。
+- [ ] 列出已验证的 fprintd 版本、Arch 包版本、设备/固件、未支持项。
+- [ ] M7 未全部通过前，M8 不得发布稳定 AUR 包。
+
+**完成判据**：支持声明与真机证据一致；不存在“代码存在即宣称支持”的条目。
+
+## M8：AUR 打包与分发（方案：libfprint fork 的 drop-in 替换包）
+
+> **前置**：M7 全部通过。M7 未完成时只允许发布 `-git`/实验包，并在包页标注“capture-only，不可用于登录”。
 
 **目标**：在 Arch Linux / AUR 上提供 `libfprint-fpc-disum`，以源码构建的 libfprint fork 替换系统 `libfprint`，让现有 `fprintd` 无需修改即可枚举并使用 `10a5:9201`。不打包厂商二进制、不替换 fprintd、不做独立 D-Bus 守护进程。
 
 **范围**：x86_64；`fprintd` 1.94.x；`libfprint` 1.94.100 基线；设备 `10a5:9201 / bcdDevice 0x0250`；LGPL-2.1-or-later。其他设备/固件、TOD 二进制、PAM 策略定制不在本里程碑。
 
-### M7.0 发布前决策与冻结
+### M8.0 发布前决策与冻结
 
 - [ ] 确定公开源码地址与稳定 tag/commit（AUR 必须能匿名拉取；当前本地仓库不能直接作为 `source`）。
 - [ ] 固定 `pkgver=1.94.100`、`pkgrel=1`、上游 commit、驱动/核心补丁清单、净室规格哈希。
@@ -456,7 +524,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 **完成判据**：源码 URL、tag、哈希、包名、维护者、支持范围写死，后续阶段不再改方案。
 
-### M7.1 PKGBUILD 与包骨架
+### M8.1 PKGBUILD 与包骨架
 
 - [ ] `pkgname=libfprint-fpc-disum`，`arch=('x86_64')`，`license=('LGPL-2.1-or-later')`。
 - [ ] `provides=('libfprint' 'libfprint-2.so=2-64')`；`conflicts=('libfprint')`；不设 `replaces`。
@@ -468,16 +536,16 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 **完成判据**：`makepkg --cleanbuild --check` 成功；包内只有源码构建产物，无预编译二进制。
 
-### M7.2 干净构建与 ABI 校验
+### M8.2 干净构建与 ABI 校验
 
 - [ ] 在干净 chroot（devtools `extra-x86_64-build`）构建，不依赖本机 `_build`。
 - [ ] 校验 soname/符号：`readelf -d` 的 `SONAME` 为 `libfprint-2.so.2`；`provides` 的 `libfprint-2.so=2-64` 与官方一致；公共符号版本未被破坏。
 - [ ] `pacman -U` 安装时只与 `libfprint` 冲突；`fprintd` 依赖仍满足；`ldd /usr/lib/fprintd` 解析到新库。
-- [ ] 运行 `fprintd-list`、`fprintd-enroll`、`fprintd-verify` 的最小冒烟（见 M7.4）。
+- [ ] 运行 `fprintd-list`、`fprintd-enroll`、`fprintd-verify` 的最小冒烟（见 M8.4）。
 
 **完成判据**：chroot 构建可复现；安装/升级不产生未声明文件冲突；`fprintd` 能启动。
 
-### M7.3 安装、升级与回滚
+### M8.3 安装、升级与回滚
 
 - [ ] 安装流程：`pacman -U` 替换 `libfprint` → `systemctl restart fprintd` → `fprintd-list` 看到设备。
 - [ ] 升级流程：AUR 包 `pkgrel`/上游 tag 变更后重建；`pacman -Syu` 不会静默换回官方库；在包说明中写明需手动更新。
@@ -486,19 +554,19 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 **完成判据**：安装、升级、卸载/回滚三步均有可复现命令与结果记录。
 
-### M7.4 功能验收（发布门槛）
+### M8.4 包安装后的 fprintd 冒烟（复用 M7 结果）
 
-- [ ] `fprintd-list` 显示 `FPC Disum Fingerprint Sensor`。
-- [ ] `fprintd-enroll`：一次 enroll 内完成默认 5 段采集；验证同会话多次 capture。
-- [ ] `fprintd-verify`：使用刚录入的 print 成功匹配；错误手指失败；取消可恢复。
-- [ ] `fprintd-delete` / `fprintd-list`：print 存储与删除正常。
-- [ ] `fprintd` 重启、suspend/resume、重新登录后设备仍可用。
-- [ ] 负例：无手指 enroll/verify 超时；取消后 daemon 不挂起。
-- [ ] 与 M6 真机证据分开记录：M6 证明采集；M7.4 证明 fprintd 端到端。
+M8 不重新定义功能验收；M7.0–M7.5 全部通过是前置。本阶段只验证打包没有破坏已验证路径。
 
-**门槛**：M7.4 未全部通过时，只能发布 `-git`/实验包并在包页明确标注“capture-only，不可用于登录”；不得发布稳定包或宣称 fprintd 可用。
+- [ ] 安装包后 `fprintd-list` 显示 `FPC Disum Fingerprint Sensor`。
+- [ ] 复用 M7 的 enroll/verify 步骤跑一遍（5 段 enroll + 成功/失败 verify），结果与 M7 基线一致。
+- [ ] 重启 `fprintd`、重启系统后设备仍可 enroll/verify。
+- [ ] 卸载本包并恢复官方 `libfprint` 后，`fprintd` 行为恢复。
+- [ ] 记录包版本、`fprintd` 版本、M7/M8 run_id。
 
-### M7.5 AUR 发布
+**门槛**：M7 未通过或本冒烟失败时，只能发布 `-git`/实验包并在包页明确标注“capture-only，不可用于登录”；不得发布稳定包或宣称 fprintd 可用。
+
+### M8.5 AUR 发布
 
 - [ ] 提交 `libfprint-fpc-disum`（及可选 `-git`）到 AUR；包页写明支持设备、固件、已验证 fprintd 版本、未支持项、回滚方法。
 - [ ] 附净室规格/向量哈希、上游 commit、M6 支持声明、真机 run_id（不含图像/密钥）。
@@ -507,7 +575,7 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 **完成判据**：AUR 包可被干净系统安装；包页信息足以让用户判断风险与回滚。
 
-### M7.6 上游化与退役
+### M8.6 上游化与退役
 
 - [ ] 将驱动与核心 USB 重取扩展提交上游；处理 review、ABI/风格与测试要求。
 - [ ] 上游接受后，AUR 包改为跟踪正式版或标记 deprecated；删除 drop-in 替换说明。
@@ -519,9 +587,9 @@ fuzzing 未纳入本轮门禁：解析器已可用于语料播种，接入 libFu
 
 - **替换系统库影响所有设备**：无法只对 FPC 生效；包页必须警告。
 - **fprintd/ABI 漂移**：soname 或依赖变化会导致重建；稳定包需固定兼容窗口。
-- **enroll/verify 未验证**：这是当前最大功能风险；M7.4 是硬门槛。
+- **enroll/verify 未验证**：这是当前最大功能风险；M7.2/M7.4 是硬门槛，M8.4 只做打包后的回归。
 - **AUR 政策**：`provides/conflicts` 替换核心库属于高影响包；不自动启用 PAM，不静默替换。
-- **源码公开**：没有匿名可拉取的 tag，AUR 包无法构建；M7.0 必须先解决。
+- **源码公开**：没有匿名可拉取的 tag，AUR 包无法构建；M8.0 必须先解决。
 - **其他传感器回归**：构建保留全部驱动，但只对目标设备做真机验收；其余仅做枚举冒烟。
 
 ## 开发规则
