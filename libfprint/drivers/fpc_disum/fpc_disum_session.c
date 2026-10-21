@@ -346,7 +346,7 @@ arm_timer_until (FpcDisumSession *self, gint64 deadline_us)
       return;
     }
 
-  interval_ms = (guint) MIN ((remaining + 999) / 1000, G_MAXUINT);
+  interval_ms = (guint)MIN ((remaining + 999) / 1000, G_MAXUINT);
   arm_timer (self, MAX (interval_ms, 1));
 }
 
@@ -426,8 +426,8 @@ note_generation (FpcDisumSession *self)
       fpc_disum_parser_clear (&self->events);
       fpc_disum_parser_init (&self->events, FPC_DISUM_STREAM_EVENT, on_event_frame, self);
       fpc_disum_parser_clear (&self->application);
-      fpc_disum_parser_init (&self->application, FPC_DISUM_STREAM_APPLICATION,
-          on_application_frame, self);
+      fpc_disum_parser_init (
+          &self->application, FPC_DISUM_STREAM_APPLICATION, on_application_frame, self);
       g_clear_pointer (&self->tls, fpc_disum_tls_free);
       fpc_disum_psk_clear (&self->psk);
       self->discarded_length += discarded;
@@ -452,8 +452,7 @@ abort_rebind (FpcDisumSession *self)
   self->rebind_allowed = FALSE;
 
   if (self->transport->init_rebind != NULL)
-    (void) self->transport->init_rebind (
-        self->transport, FPC_DISUM_INIT_REBIND_ABORT, 0);
+    (void)self->transport->init_rebind (self->transport, FPC_DISUM_INIT_REBIND_ABORT, 0);
 }
 
 /* --------------------------------------------------------------- stepping */
@@ -550,8 +549,7 @@ deliver_terminal (FpcDisumSession *self)
   record.partial_valid = TRUE;
   record.partial_length = fpc_disum_parser_pending (&self->events);
   record.discarded_valid = TRUE;
-  record.discarded_length
-      = self->discarded_length + fpc_disum_parser_pending (&self->application);
+  record.discarded_length = self->discarded_length + fpc_disum_parser_pending (&self->application);
 
   update_phase (self);
   emit_record (self, &record);
@@ -611,8 +609,7 @@ finish_close (FpcDisumSession *self, FpcDisumSessionStatus status, const gchar *
   record.partial_valid = TRUE;
   record.partial_length = fpc_disum_parser_pending (&self->events);
   record.discarded_valid = TRUE;
-  record.discarded_length
-      = self->discarded_length + fpc_disum_parser_pending (&self->application);
+  record.discarded_length = self->discarded_length + fpc_disum_parser_pending (&self->application);
 
   update_phase (self);
   emit_record (self, &record);
@@ -693,8 +690,7 @@ accept_control_out (FpcDisumSession *self, FpcDisumTransportStatus status, gsize
   if (actual_length != self->out_requested_length)
     {
       /* A short OUT never advances the state machine (SPEC §16.2). */
-      finish_operation (
-          self, FPC_DISUM_SESSION_ERROR_IO, "The control transfer completed short");
+      finish_operation (self, FPC_DISUM_SESSION_ERROR_IO, "The control transfer completed short");
       return FALSE;
     }
 
@@ -712,9 +708,9 @@ cleanup_emit (FpcDisumSession *self, guint index)
   record.direction = FPC_DISUM_DIAGNOSTIC_DIRECTION_OUT;
   record.control_valid = TRUE;
   record.bm_request_type = 0x40;
-  record.request = index == CLEANUP_ARM_STOP   ? CMD_ARM
-                   : index == CLEANUP_ABORT    ? CMD_ABORT
-                                               : CMD_SESSION_OFF;
+  record.request = index == CLEANUP_ARM_STOP ? CMD_ARM
+                   : index == CLEANUP_ABORT  ? CMD_ABORT
+                                             : CMD_SESSION_OFF;
   record.value = index == CLEANUP_ARM_STOP ? ARM_MODE_VERIFY : 0;
   record.index = 0;
   record.requested_length_valid = TRUE;
@@ -827,8 +823,7 @@ on_control_out (FpcDisumTransport *transport, FpcDisumTransportStatus status, gs
 
   if (status == FPC_DISUM_TRANSPORT_TIMEOUT)
     {
-      finish_operation (
-          self, FPC_DISUM_SESSION_ERROR_IO, "The control transfer timed out");
+      finish_operation (self, FPC_DISUM_SESSION_ERROR_IO, "The control transfer timed out");
       return;
     }
 
@@ -848,7 +843,7 @@ on_control_out (FpcDisumTransport *transport, FpcDisumTransportStatus status, gs
       break;
     case ST_INIT_CMD_INIT:
       {
-        gint64 deadline_us = g_get_monotonic_time () + (gint64) self->reopen_ms * 1000;
+        gint64 deadline_us = g_get_monotonic_time () + (gint64)self->reopen_ms * 1000;
         FpcDisumTransportStatus rebind = FPC_DISUM_TRANSPORT_OK;
 
         if (self->transport->init_rebind != NULL)
@@ -1092,12 +1087,11 @@ control_out (FpcDisumSession *self, guint8 request, guint16 value, const guint8 
   self->out_requested_length = len;
   self->cancel_requested = FALSE;
   self->pending_ops = 1;
-  self->transport->control_out (
-      self->transport, request, value, data, len, on_control_out, self);
+  self->transport->control_out (self->transport, request, value, data, len, on_control_out, self);
 }
 
-static void control_in (
-    FpcDisumSession *self, guint8 request, guint16 value, gsize requested, FpcDisumTransportDataFunc done);
+static void control_in (FpcDisumSession *self, guint8 request, guint16 value, gsize requested,
+    FpcDisumTransportDataFunc done);
 
 static void on_read (FpcDisumTransport *transport, FpcDisumTransportStatus status,
     const guint8 *data, gsize len, gpointer user_data);
@@ -1151,8 +1145,7 @@ control_in (FpcDisumSession *self, guint8 request, guint16 value, gsize requeste
 static gboolean
 take_tls_output (FpcDisumSession *self)
 {
-  gsize written
-      = fpc_disum_tls_take_output (self->tls, self->tls_chunk, sizeof self->tls_chunk);
+  gsize written = fpc_disum_tls_take_output (self->tls, self->tls_chunk, sizeof self->tls_chunk);
 
   if (written == 0)
     return FALSE;
@@ -1259,8 +1252,8 @@ tls_process_pending (FpcDisumSession *self, gboolean application_allowed)
       if (!application_allowed)
         {
           /* The device must not send application data before GET_IMG (SPEC §4.5). */
-          finish_operation (self, FPC_DISUM_SESSION_ERROR_PROTOCOL,
-              "application data arrived before GET_IMG");
+          finish_operation (
+              self, FPC_DISUM_SESSION_ERROR_PROTOCOL, "application data arrived before GET_IMG");
           return TRUE;
         }
 
@@ -1315,8 +1308,8 @@ on_application_frame (const FpcDisumFrame *frame, gpointer user_data)
   /* Only a capture that followed an accepted GET_IMG may deliver an image. */
   if (self->state != ST_CAPTURE_IMAGE || self->cancelled || !self->armed)
     {
-      finish_operation (self, FPC_DISUM_SESSION_ERROR_PROTOCOL,
-          "application data arrived before GET_IMG");
+      finish_operation (
+          self, FPC_DISUM_SESSION_ERROR_PROTOCOL, "application data arrived before GET_IMG");
       return;
     }
 
@@ -1361,7 +1354,8 @@ on_event_frame (const FpcDisumFrame *frame, gpointer user_data)
       if (self->state == ST_HANDSHAKE || self->state == ST_CAPTURE_WAIT_TOUCH
           || self->state == ST_CAPTURE_IMAGE)
         {
-          if (self->tls == NULL || !fpc_disum_tls_feed (self->tls, frame->payload, frame->payload_len))
+          if (self->tls == NULL
+              || !fpc_disum_tls_feed (self->tls, frame->payload, frame->payload_len))
             {
               record_event (self, frame);
               finish_operation (self, FPC_DISUM_SESSION_ERROR_TLS,
@@ -1506,8 +1500,8 @@ run_state (FpcDisumSession *self)
             FpcDisumTransportIdentity identity = current_identity (self);
 
             if (self->transport->init_rebind != NULL)
-              rebind = self->transport->init_rebind (
-                  self->transport, FPC_DISUM_INIT_REBIND_BEGIN, 0);
+              rebind
+                  = self->transport->init_rebind (self->transport, FPC_DISUM_INIT_REBIND_BEGIN, 0);
             if (rebind != FPC_DISUM_TRANSPORT_OK)
               {
                 finish_operation (
@@ -1541,8 +1535,8 @@ run_state (FpcDisumSession *self)
                   self->transport, FPC_DISUM_INIT_REBIND_COMMIT, self->reopen_deadline_us);
             if (rebind != FPC_DISUM_TRANSPORT_OK)
               {
-                finish_operation (
-                    self, FPC_DISUM_SESSION_ERROR_IO, "The reclaimed device could not be committed");
+                finish_operation (self, FPC_DISUM_SESSION_ERROR_IO,
+                    "The reclaimed device could not be committed");
                 return;
               }
 
@@ -1711,8 +1705,7 @@ cleanup_advance (FpcDisumSession *self)
 
   if (self->cleanup_index == CLEANUP_COUNT)
     {
-      finish_close (self, self->cleanup_failed ? FPC_DISUM_SESSION_ERROR_IO
-                                               : FPC_DISUM_SESSION_OK,
+      finish_close (self, self->cleanup_failed ? FPC_DISUM_SESSION_ERROR_IO : FPC_DISUM_SESSION_OK,
           self->cleanup_failed ? "a cleanup command failed" : NULL);
       return;
     }
@@ -1729,7 +1722,7 @@ begin_cleanup (FpcDisumSession *self)
       self->cleanup[i].submitted = FALSE;
       self->cleanup[i].status = FPC_DISUM_TRANSPORT_OK;
       self->cleanup[i].requested_length
-          = i == CLEANUP_ARM_STOP ? (gsize) sizeof arm_stop_payload : 0;
+          = i == CLEANUP_ARM_STOP ? (gsize)sizeof arm_stop_payload : 0;
       self->cleanup[i].actual_known = FALSE;
       self->cleanup[i].actual_length = 0;
       self->cleanup[i].result = NULL;
@@ -1880,8 +1873,7 @@ fpc_disum_session_set_arm_complete_handler (
 }
 
 void
-fpc_disum_session_set_diagnostics (
-    FpcDisumSession *self, FpcDisumDiagnostics *diagnostics)
+fpc_disum_session_set_diagnostics (FpcDisumSession *self, FpcDisumDiagnostics *diagnostics)
 {
   g_return_if_fail (self != NULL);
 

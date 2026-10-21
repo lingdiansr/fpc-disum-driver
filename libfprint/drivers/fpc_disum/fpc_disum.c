@@ -230,7 +230,7 @@ dev_arm_complete (gsize actual_length, gpointer user_data)
   if (self->state != FPC_DISUM_STATE_CAPTURING)
     return;
 
-  g_signal_emit_by_name (self, "arm-complete", (guint) actual_length);
+  g_signal_emit_by_name (self, "arm-complete", (guint)actual_length);
 }
 
 /* Forward one de-sensitised record to subscribers.  The variant is built only
@@ -244,8 +244,7 @@ dev_diagnostic (const FpcDisumDiagnosticRecord *record, gpointer user_data)
   if (self->diagnostics == NULL || self->diagnostic_signal_id == 0)
     return;
 
-  if (!g_signal_has_handler_pending (
-          FP_DEVICE (self), self->diagnostic_signal_id, 0, FALSE))
+  if (!g_signal_has_handler_pending (FP_DEVICE (self), self->diagnostic_signal_id, 0, FALSE))
     return;
 
   /* to_variant() returns a floating reference; sink it so the GValue made by
@@ -312,8 +311,7 @@ dev_open (FpImageDevice *dev)
   g_assert (self->state == FPC_DISUM_STATE_IDLE);
 
   self->state = FPC_DISUM_STATE_OPENING;
-  self->transport
-      = fpc_disum_usb_transport_new (FP_DEVICE (dev), self->diagnostics, &error);
+  self->transport = fpc_disum_usb_transport_new (FP_DEVICE (dev), self->diagnostics, &error);
 
   if (self->transport == NULL)
     {
@@ -455,16 +453,14 @@ enum
 };
 
 static void
-fpi_device_fpc_disum_get_property (
-    GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+fpi_device_fpc_disum_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
 {
   FpiDeviceFpcDisum *self = FPI_DEVICE_FPC_DISUM (object);
 
   switch (prop_id)
     {
     case PROP_FPC_DISUM_RUN_ID:
-      g_value_set_string (
-          value,
+      g_value_set_string (value,
           self->diagnostics != NULL ? fpc_disum_diagnostics_run_id (self->diagnostics) : NULL);
       break;
 
@@ -507,8 +503,7 @@ static void
 fpi_device_fpc_disum_init (FpiDeviceFpcDisum *self)
 {
   self->diagnostics = fpc_disum_diagnostics_new ();
-  self->diagnostic_signal_id
-      = g_signal_lookup ("fpc-disum-diagnostic", G_OBJECT_TYPE (self));
+  self->diagnostic_signal_id = g_signal_lookup ("fpc-disum-diagnostic", G_OBJECT_TYPE (self));
 
   fpc_disum_diagnostics_set_observer (self->diagnostics, dev_diagnostic, self);
 }
@@ -523,14 +518,12 @@ fpi_device_fpc_disum_class_init (FpiDeviceFpcDisumClass *klass)
   object_class->finalize = fpi_device_fpc_disum_finalize;
   object_class->get_property = fpi_device_fpc_disum_get_property;
 
-  g_object_class_install_property (
-      object_class, PROP_FPC_DISUM_RUN_ID,
+  g_object_class_install_property (object_class, PROP_FPC_DISUM_RUN_ID,
       g_param_spec_string ("fpi-fpc-disum-run-id", "Run identifier",
           "Diagnostic run identifier shared by every open of this device", NULL,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
-  g_object_class_install_property (
-      object_class, PROP_FPC_DISUM_SPEC_SHA256,
+  g_object_class_install_property (object_class, PROP_FPC_DISUM_SPEC_SHA256,
       g_param_spec_string ("fpi-fpc-disum-spec-sha256", "Reviewed specification",
           "SHA-256 of the cleanroom specification this driver was built against", NULL,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
@@ -538,12 +531,12 @@ fpi_device_fpc_disum_class_init (FpiDeviceFpcDisumClass *klass)
   /* One G_TYPE_UINT: the control transfer's actual length (four on success).
    * The library never plays a sound or spawns a notification; the operator
    * probe is the only consumer. */
-  g_signal_new ("arm-complete", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
-      NULL, G_TYPE_NONE, 1, G_TYPE_UINT);
+  g_signal_new ("arm-complete", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL,
+      G_TYPE_NONE, 1, G_TYPE_UINT);
 
   /* One a{sv} of whitelisted metadata; never any I/O payload. */
-  g_signal_new ("fpc-disum-diagnostic", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL,
-      NULL, NULL, G_TYPE_NONE, 1, G_TYPE_VARIANT);
+  g_signal_new ("fpc-disum-diagnostic", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      NULL, G_TYPE_NONE, 1, G_TYPE_VARIANT);
 
   dev_class->id = FP_COMPONENT;
   dev_class->full_name = "FPC Disum Fingerprint Sensor";
