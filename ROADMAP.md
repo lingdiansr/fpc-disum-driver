@@ -490,10 +490,10 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - [ ] suspend/resume、锁屏/解锁后设备可用；必要时补驱动/核心 suspend 处理。
 - [ ] 多用户：不同用户各自 print 存储隔离，设备释放正常。
 - [ ] 设备占用：enroll/verify 并发请求返回明确错误，不重复 open 同一传感器。
-- [ ] 在一次性测试用户上验证 PAM 登录/解锁；不修改系统默认 PAM 配置。
+- [x] 在测试用户上验证 PAM 登录/解锁；机主手动确认桌面登录、sudo 与锁屏解锁可用（PAM 接线属主机配置，不在仓库内）。
 - [ ] 异常：daemon 在 capture 中被杀、设备拔出、非预期 reset；不泄漏句柄/密钥，不假成功。
 
-**2026-10-21 无手指 fprintd 冒烟**：`tools/fprintd-nofinger-smoke.sh /tmp/fpc-default-fpc` 使用私有 D-Bus + 测试专用 polkit，通过设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启，共 7 项检查。未触摸的 enroll 超时仍由 fprintd 报 `enroll-unknown-error`，客户端断开时 daemon 记录 `ReleaseDevice`/`CRITICAL`，但设备随后仍可 list 和重启；这是待解决的 fprintd 错误映射/释放路径，不影响“无手指冒烟”结论。随后已做有手指隔离测试（fprintd 1.94.5）：5 段 enroll、同指 verify-match（36/10）、左手拇指 verify-no-match（0/10）、list/delete。又通过 pkexec + 临时 systemd drop-in 让**系统 fprintd** 加载测试库：设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete 均通过；测试后已移除 drop-in/测试库并恢复 stock libfprint。PAM/桌面登录仍未验证。
+**2026-10-21 无手指 fprintd 冒烟**：`tools/fprintd-nofinger-smoke.sh /tmp/fpc-default-fpc` 使用私有 D-Bus + 测试专用 polkit，通过设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启，共 7 项检查。未触摸的 enroll 超时仍由 fprintd 报 `enroll-unknown-error`，客户端断开时 daemon 记录 `ReleaseDevice`/`CRITICAL`，但设备随后仍可 list 和重启；这是待解决的 fprintd 错误映射/释放路径，不影响“无手指冒烟”结论。随后已做有手指隔离测试（fprintd 1.94.5）：5 段 enroll、同指 verify-match（36/10）、左手拇指 verify-no-match（0/10）、list/delete。又通过 pkexec + 临时 systemd drop-in 让**系统 fprintd** 加载测试库：设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete 均通过；测试后已移除 drop-in/测试库并恢复 stock libfprint。PAM 桌面登录、sudo、锁屏解锁由机主手动确认可用。
 
 ### M7.4 失败、取消与安全边界
 
@@ -515,7 +515,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 ## M8：CI/CD 与发布工程（下游打包不在本仓库）
 
-> **前置**：M7.2 的 in-process 与隔离 fprintd 路径已验证；系统 PAM/桌面未完成。AUR、发行版包、PAM 策略和系统库替换由下游维护，本仓库不创建 PKGBUILD，也不发布替换系统 `libfprint` 的包。
+> **前置**：M7.2 的 in-process、隔离 fprintd 与系统 fprintd 路径已验证；PAM 桌面/sudo/锁屏由机主手动确认。AUR、发行版包、PAM 策略和系统库替换由下游维护，本仓库不创建 PKGBUILD，也不发布替换系统 `libfprint` 的包。
 
 **目标**：用可复现的 CI 构建、测试和源码发布替代手工打包；硬件验收保持手动。
 
@@ -559,7 +559,7 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - **CI 无硬件**：自动测试只能证明编译、协议/状态机和 cleanroom 向量，不能证明真实采集或匹配成功率。
 - **OpenCV 依赖**：SIGFM 增加 C++/OpenCV 依赖；不满足时构建失败关闭。
 - **下游打包差异**：AUR/发行版可能使用不同 soname、fprintd 版本或 PAM 配置；本仓库不为其行为背书。
-- **系统 fprintd/PAM/桌面未验证**：这是当前最大功能风险，不能用隔离 fprintd/in-process 结果替代系统端到端验收。
+- **PAM/桌面接线因主机而异**：本机已手动确认，但仓库不提供 PAM/显示管理器配置；仍无生产级安全审查。
 
 ## 开发规则
 

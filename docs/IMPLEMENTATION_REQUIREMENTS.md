@@ -83,12 +83,13 @@
 - 初始化、TLS-PSK、ARM、等待触摸、GET_IMG、112×88 图像、取消、取消后再采集、close/reopen 两次采集。
 - SIGFM in-process enroll/verify：5 段注册、同指验证、异指拒绝；SIGFM print 的磁盘序列化/反序列化。
 - 隔离 fprintd（fprintd 1.94.5，私有 D-Bus、测试 polkit、临时存储）：5 段 enroll、同指 verify-match、左手拇指 verify-no-match、list/delete、daemon 重启后重新加载模板。
-- 系统 fprintd（通过临时 systemd drop-in 加载测试 libfprint，已回滚）：设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete；未改 PAM。
+- 系统 fprintd（通过 systemd drop-in 加载测试 libfprint）：设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete。
+- 本机 PAM 桌面登录、sudo、锁屏解锁：由机主手动确认可用；PAM/显示管理器接线不包含在本仓库中。
 - 覆盖引导注册：重复/无重叠图会重试且不消耗阶段。
 
 未验证或未支持：
 
-- 系统 PAM/桌面登录端到端；`fprintd-identify` 多模板；多用户存储；suspend/resume 与完整 daemon 生命周期。
+- `fprintd-identify` 多模板；多用户存储；suspend/resume 与完整 daemon 生命周期；活体/防伪与生产级安全审查。
 - 其他设备/固件、DFU、异常复位恢复、`0x64` 语义、上游 ABI/接受度。
 - 生产级 FAR/FRR、活体检测、防伪和多人种/多设备泛化。
 
@@ -103,10 +104,11 @@
 | SIGFM print 存储 | 写入/读取后曾成功 MATCH；`fp_print_equal` 的 SIGFM 分支已修 |
 | fprintd 无手指冒烟 | 设备枚举、空存储 list/delete、无 print verify、enroll 取消、daemon 重启均通过 |
 | fprintd 有手指（隔离，1.94.5） | 5 段 enroll、同指 verify-match（36/10）、左手拇指 verify-no-match（0/10）、list/delete 通过；系统 PAM/桌面未测 |
-| 系统 fprintd（临时 drop-in） | 设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete 通过；已回滚，PAM 未测 |
+| 系统 fprintd（drop-in） | 设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete 通过 |
+| 系统 PAM/桌面 | 机主手动确认桌面登录、sudo、锁屏解锁可用；接线因主机而异 |
 | 离线用例 | 17 通过、32 跳过、0 失败 |
 
-前四项是 in-process libfprint 结果；隔离 fprintd 使用私有 D-Bus/测试 polkit/临时存储，系统 fprintd 使用临时 systemd drop-in 加载测试库（已回滚）。这些都不是 PAM/桌面认证结论。复现命令与 run_id 见 `ROADMAP.md`。
+前四项是 in-process libfprint 结果；隔离 fprintd 使用私有 D-Bus/测试 polkit/临时存储；系统 fprintd/PAM 结果来自本机手动确认。PAM/显示管理器接线因主机而异，不能从本仓库直接复现。复现命令与 run_id 见 `ROADMAP.md`。
 
 ## 8. 变更控制
 
