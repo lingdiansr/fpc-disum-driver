@@ -52,7 +52,7 @@
 
 - 实现只使用仓库内交付的规格与人工向量；未读取研究侧仓库、专有二进制或原始采集材料。
 - 真机证据写入 `~/fpc-disum-runs/` 的 0700 目录、0600 文件；不保存真实图像、像素摘要、PSK/envelope、TLS 载荷或原始总线全包。
-- `M6_ARM_GATE_NOTE.md` 与 `M6_INIT_READ_GAP_FINDING.md` 是净室侧补充说明，不改变交付包与 `SHA256SUMS`。
+- [`ARM_GATE_NOTE.md`](ARM_GATE_NOTE.md) 与 [`INIT_READ_GAP_FINDING.md`](INIT_READ_GAP_FINDING.md) 是净室侧补充说明，不改变交付包与 `SHA256SUMS`。
 
 ## 7. 复现入口
 
