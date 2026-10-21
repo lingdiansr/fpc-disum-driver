@@ -473,13 +473,15 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 - [x] **替换 matcher**：接入 SIGFM（OpenCV SIFT + ratio + 几何一致性），`score_threshold=10`；新增 `enroll_coverage_shift=12` 的覆盖引导注册。
 - [x] `fprintd-enroll`：隔离 fprintd daemon 完成 5 段采集；覆盖重试有效；取消/重启后仍可 list。
 - [x] `fprintd-verify`：隔离 daemon 同指 `verify-match`（SIGFM 36/10），左手拇指 `verify-no-match`（5 个模板均 0/10）。
-- [ ] `fprintd-identify`：至少两个已录入 print 中选择正确者；不匹配时失败而非误报。
+- [x] `fprintd-identify`：fprintd 1.94.5 无 `fprintd-identify` 二进制；`fprintd-verify -f any` 走 libfprint identify。left-thumb 与 right-index 均 `verify-match`，未注册右手中指 `verify-no-match`。
 - [x] `fprintd-list` / `fprintd-delete`：隔离 daemon 可列出、删除；删除后回到空存储。
 - [ ] 记录 FRR/FAR 的粗略样本（不是安全认证结论），至少覆盖成功/失败/重试。
 
 **完成判据**：enroll/verify/identify 在目标设备上可重复通过；失败路径不产生假成功；阈值与图像质量有记录。
 
-**2026-10-21 实现与真机**：覆盖引导下注册 **5/5**（太近/无重叠会重试且不消耗阶段），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=true**。`examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；随后修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败。仍需系统 fprintd/PAM/桌面端到端、identify 多模板与打包回归。
+**2026-10-21 实现与真机**：覆盖引导下注册 **5/5**（太近/无重叠会重试且不消耗阶段），同指 verify **3/3 match=true**（分数 141/20/1085），异指 verify **0/3 match=true**。`examples/enroll` 写入磁盘、`examples/verify` 反序列化后曾成功 MATCH；随后修复 `fp_print_equal()` 未处理 `FPI_PRINT_SIGFM` 的 critical。离线 `--no-suite data`：17 通过、32 跳过、0 失败。仍需系统 fprintd/PAM/桌面端到端、多用户存储与打包回归。
+
+**2026-10-21 多模板 identify 补充**：`fprintd-verify` 不带 `-f` 时 CLI 会主动选第一个已注册手指（这里是 left-thumb），不是多模板 identify；这是为什么右键一直显示 `Verifying: left-thumb`。正确入口是 `fprintd-verify -f any`：right-index、left-thumb 均 `verify-match`，未注册右手中指 `verify-no-match`。1.94.5 没有独立 `fprintd-identify` 可执行文件。
 
 **历史依据**：NBIS 阈值、NCC 相关性和 8 轮扩样本的失败记录已被 SIGFM 实现取代，保留在 git 历史（commit `5ac0648`、`70adc30`、`b0d9391`）；不再作为当前实现路径。
 

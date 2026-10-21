@@ -90,6 +90,12 @@ tools/fprintd-nofinger-smoke.sh /path/to/build
 
 It requires `fprintd`, `dbus-run-session`, `busctl` and Python PyGObject; it covers enumeration, empty storage, delete-with-no-prints, verify-without-print, enrollment cancellation and daemon restart. Successful enroll/verify require a finger and are manual; PAM/desktop integration remains unverified.
 
+`fprintd-verify` without `-f` selects the first enrolled finger; it is not multi-template identification in fprintd 1.94.5. Use:
+
+```sh
+fprintd-verify -f any "$USER"
+```
+
 ## Install and packaging
 
 This project ships source and CI build/test artifacts. **AUR and distribution packaging are maintained downstream, not in this repository**; there is no package script here that replaces system `libfprint`.
@@ -119,7 +125,7 @@ Do not edit the spec or vectors. `docs/IMPLEMENTATION_REQUIREMENTS.md` records i
 ## Status and limitations
 
 - In-process results on one device: 5/5 coverage-guided enrollment, 3/3 genuine verify, 0/3 impostor verify. Isolated fprintd: 5-stage enroll, same-finger `verify-match` (SIGFM 36/10), left-thumb `verify-no-match` (all templates 0/10), list/delete passed. System fprintd repeated enroll/verify/list/delete successfully; PAM desktop login, sudo and lock-screen unlock were manually confirmed. These are small samples, not a security claim.
-- `fprintd-identify` with multiple templates, multi-user storage, suspend/resume and the full daemon lifecycle remain unverified. No liveness/spoof testing or production security review has been done.
+- Multi-template identification with `fprintd-verify -f any` matched both enrolled fingers and rejected an unenrolled finger; multi-user storage, suspend/resume and the full daemon lifecycle remain unverified. No liveness/spoof testing or production security review has been done.
 - Small-area sensors have limited overlap between presses; expect higher false rejects than a full-size sensor.
 - SIGFM templates contain image-derived features. Treat stored templates and any captured images as biometric data.
 

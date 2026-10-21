@@ -89,7 +89,7 @@
 
 未验证或未支持：
 
-- `fprintd-identify` 多模板；多用户存储；suspend/resume 与完整 daemon 生命周期；活体/防伪与生产级安全审查。
+- 多用户存储；suspend/resume 与完整 daemon 生命周期；活体/防伪与生产级安全审查。
 - 其他设备/固件、DFU、异常复位恢复、`0x64` 语义、上游 ABI/接受度。
 - 生产级 FAR/FRR、活体检测、防伪和多人种/多设备泛化。
 
@@ -106,6 +106,7 @@
 | fprintd 有手指（隔离，1.94.5） | 5 段 enroll、同指 verify-match（36/10）、左手拇指 verify-no-match（0/10）、list/delete 通过；系统 PAM/桌面未测 |
 | 系统 fprintd（drop-in） | 设备枚举、5 段 enroll、同指 verify-match、左手拇指 verify-no-match、delete 通过 |
 | 系统 PAM/桌面 | 机主手动确认桌面登录、sudo、锁屏解锁可用；接线因主机而异 |
+| 多模板 identify | `fprintd-verify -f any`：left-thumb、right-index 均 match，未注册右手中指 no-match；无 `fprintd-identify` 二进制 |
 | 离线用例 | 17 通过、32 跳过、0 失败 |
 
 前四项是 in-process libfprint 结果；隔离 fprintd 使用私有 D-Bus/测试 polkit/临时存储；系统 fprintd/PAM 结果来自本机手动确认。PAM/显示管理器接线因主机而异，不能从本仓库直接复现。复现命令与 run_id 见 `ROADMAP.md`。

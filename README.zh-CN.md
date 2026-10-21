@@ -90,6 +90,12 @@ tools/fprintd-nofinger-smoke.sh /path/to/build
 
 需要 `fprintd`、`dbus-run-session`、`busctl` 和 Python PyGObject；覆盖设备枚举、空存储、无 print 删除、无 print verify、enroll 取消和 daemon 重启。成功 enroll/verify 需要手指，属于手动测试；PAM/桌面集成仍未验证。
 
+`fprintd-verify` 不带 `-f` 时会选第一个已注册手指，不是 fprintd 1.94.5 的多模板 identify。多模板测试用：
+
+```sh
+fprintd-verify -f any "$USER"
+```
+
 ## 安装与打包
 
 本仓库提供源码和 CI 构建/测试产物。**AUR 和发行版打包由下游维护，不在本仓库内进行**；这里没有替换系统 `libfprint` 的打包脚本。
@@ -119,7 +125,7 @@ tests/                         离线协议、状态机与净室测试
 ## 状态与限制
 
 - 单设备 in-process 结果：覆盖引导注册 5/5，同指验证 3/3，异指验证 0/3。隔离 fprintd：5 段注册、同指 `verify-match`（SIGFM 36/10）、左手拇指 `verify-no-match`（所有模板 0/10）、list/delete 通过。系统 fprintd 也重复通过 enroll/verify/list/delete；PAM 桌面登录、sudo 与锁屏解锁由机主手动确认。样本很小，不构成安全结论。
-- 多模板 `fprintd-identify`、多用户存储、suspend/resume 与完整 daemon 生命周期仍未验证；未做活体/防伪测试或生产级安全审查。
+- 多模板 identify 已用 `fprintd-verify -f any` 验证：两根已注册手指均 `verify-match`，未注册手指 `verify-no-match`；多用户存储、suspend/resume 与完整 daemon 生命周期仍未验证；未做活体/防伪测试或生产级安全审查。
 - 小面积传感器每次按压的重叠区域有限，误拒率可能高于全尺寸传感器。
 - SIGFM 模板包含可从图像重建的特征。请把存储的模板和任何采集图像视为生物识别敏感数据。
 
