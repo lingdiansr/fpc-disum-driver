@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc
+            cc: gcc
+            cxx: g++
+            extra: ""
+          - name: clang
+            cc: clang
+            cxx: clang++
+            extra: "clang lld"
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config python3 \
+            libglib2.0-dev libgusb-dev libusb-1.0-0-dev libssl-dev \
+            libopencv-dev libpixman-1-dev libgudev-1.0-dev libudev-dev \
+            ${{ matrix.extra }}
+
+      - name: Verify cleanroom input
+        run: sha256sum -c docs/SHA256SUMS
+
+      - name: Configure
+        run: |
+          meson setup build \
+            -Ddrivers=all \
+            -Ddoc=false \
+            -Dintrospection=false \
+            -Dinstalled-tests=false \
+            -Dgtk-examples=false \
+            -Dudev_rules=disabled
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs --no-suite data
+
+      - name: Verify udev hwdb
+        run: |
+          meson compile -C build udev-hwdb
+          G_DEBUG=fatal-warnings \
+            UDEV_HWDB="$PWD/build/libfprint/fprint-list-udev-hwdb" \
+            UDEV_HWDB_CHECK_CONTENTS=1 \
+            MESON_SOURCE_ROOT="$PWD" \
+            MESON_BUILD_ROOT="$PWD/build" \
+            sh tests/test-generated-hwdb.sh
+
+  sanitizers:
+    name: sanitizers (clang ASan+UBSan)
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang
+      CXX: clang++
+      ASAN_OPTIONS: halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:abort_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config python3 clang lld \
+            libglib2.0-dev libgusb-dev libusb-1.0-0-dev libssl-dev \
+            libopencv-dev libpixman-1-dev libgudev-1.0-dev libudev-dev
+
+      - name: Verify cleanroom input
+        run: sha256sum -c docs/SHA256SUMS
+
+      - name: Configure with sanitizers
+        run: |
+          meson setup build \
+            -Ddrivers=fpc_disum \
+            -Ddoc=false \
+            -Dintrospection=false \
+            -Dinstalled-tests=false \
+            -Dgtk-examples=false \
+            -Dudev_rules=disabled \
+            -Dudev_hwdb=disabled \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs --no-suite data

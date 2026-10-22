@@ -2,6 +2,8 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+[![CI](https://github.com/lingdiansr/fpc-disum-driver/actions/workflows/ci.yml/badge.svg)](https://github.com/lingdiansr/fpc-disum-driver/actions/workflows/ci.yml)
+
 Linux `libfprint` driver for the **FPC Disum** fingerprint sensor (`10a5:9201`), the FPC1022-based 112×88 press sensor. This repository is a `libfprint` fork; it is not a standalone daemon.
 
 > **Status: experimental.** In-process `libfprint`, an isolated fprintd daemon, and the **system fprintd** have passed enroll/verify/list/delete on the tested device. On the tested host, the owner also manually confirmed **PAM desktop login, sudo and lock-screen unlock**. Do not replace your system `libfprint` for daily authentication without understanding the risk; PAM/display-manager wiring is host-specific and not provided by this repository.
@@ -133,7 +135,12 @@ See [`ROADMAP.md`](ROADMAP.md) for milestones, evidence and open items.
 
 ## CI/CD
 
-CI builds the offline matrix (LLVM/GCC/sanitizers/compile-only), verifies the cleanroom hashes, runs protocol/state-machine tests and produces source/test artifacts. Hardware tests are **manual**; CI has no sensor. Release engineering does not publish AUR or distribution packages.
+GitHub Actions:
+
+- `.github/workflows/ci.yml`: GCC/Clang build matrix, ASan+UBSan job, cleanroom hash check, protocol/state-machine tests and the generated udev hwdb. CI has no sensor.
+- `.github/workflows/release.yml`: on `v*` tags, builds a source archive and `SHA256SUMS` and publishes a GitHub Release. It does **not** publish AUR or distribution packages; those remain downstream.
+
+Hardware tests remain manual.
 
 ## Contributing
 

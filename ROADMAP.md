@@ -529,6 +529,8 @@ fprintd enroll 会在一次 open 内连续取 5 张图；M6 只验证了单次�
 
 **完成判据**：同一 commit 在干净环境可重复构建。
 
+**2026-10-22 实现**：`.github/workflows/ci.yml` 已加入 GCC/Clang 矩阵、ASan+UBSan、cleanroom/协议/状态机测试和 hwdb 校验；`.github/workflows/release.yml` 在 `v*` tag 生成源码归档 + `SHA256SUMS` 并发布 GitHub Release。CI 无硬件，不发布 AUR/发行版包。
+
 ### M8.1 Pipeline
 
 - [ ] checkout 后先执行 `sha256sum -c docs/SHA256SUMS`，失败即停止。

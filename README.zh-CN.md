@@ -2,6 +2,8 @@
 
 [English](README.md) | **简体中文**
 
+[![CI](https://github.com/lingdiansr/fpc-disum-driver/actions/workflows/ci.yml/badge.svg)](https://github.com/lingdiansr/fpc-disum-driver/actions/workflows/ci.yml)
+
 Linux `libfprint` 驱动，支持 **FPC Disum** 指纹传感器（`10a5:9201`），即基于 FPC1022 的 112×88 按压式传感器。本仓库是 `libfprint` 的派生源码树，不是独立守护进程。
 
 > **状态：实验性。** 在已验证设备上，in-process `libfprint`、隔离 fprintd 与**系统 fprintd** 都已通过注册/验证/list/delete；机主还在本机手动确认 **PAM 桌面登录、sudo 与锁屏解锁**可用。不要在未理解风险的情况下用它替换系统的 `libfprint` 来做日常认证；PAM/显示管理器接线因主机而异，本仓库不提供。
@@ -133,7 +135,12 @@ tests/                         离线协议、状态机与净室测试
 
 ## CI/CD
 
-CI 构建离线矩阵（LLVM/GCC/sanitizers/仅编译），校验净室哈希，运行协议/状态机测试并产出源码/测试产物。硬件测试为**手动**，CI 不连接传感器。发布流程不发布 AUR 或发行版包。
+GitHub Actions：
+
+- `.github/workflows/ci.yml`：GCC/Clang 构建矩阵、ASan+UBSan、净室哈希校验、协议/状态机测试和生成的 udev hwdb。CI 不连接传感器。
+- `.github/workflows/release.yml`：push `v*` tag 时生成源码归档与 `SHA256SUMS`，发布 GitHub Release；**不发布 AUR/发行版包**，这些仍由下游完成。
+
+硬件测试保持手动。
 
 ## 参与贡献
 
